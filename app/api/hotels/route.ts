@@ -1,8 +1,9 @@
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import { NextResponse } from "next/server";
 
 // GET  — fetch hotel history, most recent first
 export async function GET() {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("hotel_history")
     .select("*")
@@ -16,6 +17,7 @@ export async function GET() {
 // POST — upsert a single hotel row by name (case-insensitive).
 //         Called for every row that has hotel_name + tbo_gross filled in.
 export async function POST(req: Request) {
+  const supabase = getSupabase();
   const body = await req.json();
   const {
     hotel_name,

@@ -1,8 +1,9 @@
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import { NextResponse } from "next/server";
 
 // GET  — load the last saved board state
 export async function GET() {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("current_session")
     .select("*")
@@ -19,6 +20,7 @@ export async function GET() {
 
 // PUT  — upsert the full board state
 export async function PUT(req: Request) {
+  const supabase = getSupabase();
   const body = await req.json();
   const { rows, opex_pct, reward_pct } = body;
 

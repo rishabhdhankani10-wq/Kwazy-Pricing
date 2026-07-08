@@ -1,7 +1,9 @@
 "use client";
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { compute, fmt, pct, type Inputs, type Result } from "./engine";
+import { compute, fmt, pct, type Result } from "./engine";
+
+type CostMode = "night" | "total";
 
 type Row = {
   id: number;
@@ -10,6 +12,9 @@ type Row = {
   mmt: string;
   goibibo: string;
   booking: string;
+  checkIn: string;   // ISO date string, optional
+  nights: string;    // number of nights (default "1")
+  mode: CostMode;    // are the prices entered per-night or for the whole stay
 };
 
 type HotelRecord = {
@@ -27,6 +32,9 @@ type HotelRecord = {
   markup: number | null;
   net_profit: number | null;
   net_margin_pct: number | null;
+  check_in: string | null;
+  nights: number | null;
+  cost_mode: string | null;
   updated_at: string;
 };
 
@@ -41,12 +49,20 @@ const blankRow = (): Row => ({
   mmt: "",
   goibibo: "",
   booking: "",
+  checkIn: "",
+  nights: "1",
+  mode: "night",
 });
 
 const num = (s: string) => {
   const n = parseFloat(s.replace(/[^0-9.]/g, ""));
   return isNaN(n) ? 0 : n;
 };
+
+const nightsOf = (r: Row) => Math.max(1, Math.round(num(r.nights) || 1));
+
+// Convert a raw entered price to a per-night figure based on the row's mode.
+const toNight = (raw: number, r: Row) => (r.mode === "total" ? raw / nightsOf(r) : raw);
 
 const fmtDate = (iso: string) => {
   const d = new Date(iso);
@@ -75,7 +91,15 @@ export default function Page() {
       .then((r) => r.json())
       .then((data) => {
         if (data && data.rows && data.rows.length > 0) {
-          const loaded: Row[] = data.rows.map((r: Row) => ({ ...r, id: nextId++ }));
+          const loaded: Row[] = data.rows.map((r: Partial<Row>) => ({
+            ...blankRow(),
+            ...r,
+            id: nextId++,
+            // backfill fields that may not exist in older saves
+            checkIn: r.checkIn ?? "",
+            nights: r.nights ?? "1",
+            mode: (r.mode as CostMode) ?? "night",
+          }));
           setRows(loaded);
           if (data.opex_pct != null) setOpexPct(Number(data.opex_pct));
           if (data.reward_pct != null) setRewardPct(Number(data.reward_pct));
@@ -124,35 +148,40 @@ export default function Page() {
     currentRows.forEach((row, i) => {
       if (!row.hotel.trim() || !num(row.tbo)) return;
       const res = computedRes[i];
+      const n = nightsOf(row);
       fetch("/api/hotels", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           hotel_name: row.hotel.trim(),
-          tbo_gross: num(row.tbo),
+          // stored normalized to PER-NIGHT so history is comparable
+          tbo_gross: toNight(num(row.tbo), row),
           tbo_base: res.tboBase,
           tbo_gst: res.tboEmbeddedGst,
           tbo_slab_label: res.tboSlab.label,
           itc_applies: res.itcApplies,
-          mmt: num(row.mmt) || null,
-          goibibo: num(row.goibibo) || null,
-          booking: num(row.booking) || null,
+          mmt: num(row.mmt) ? toNight(num(row.mmt), row) : null,
+          goibibo: num(row.goibibo) ? toNight(num(row.goibibo), row) : null,
+          booking: num(row.booking) ? toNight(num(row.booking), row) : null,
           sell_price: res.cheapestCompetitor !== null ? res.sellingPrice : null,
           markup: res.cheapestCompetitor !== null ? res.markup : null,
           net_profit: res.cheapestCompetitor !== null ? res.netProfit : null,
           net_margin_pct: res.cheapestCompetitor !== null ? res.netMarginPct : null,
+          check_in: row.checkIn || null,
+          nights: n,
+          cost_mode: row.mode,
         }),
       }).catch(() => {});
     });
   }, []);
 
-  // ── Computed results ────────────────────────────────────────────────────────
+  // ── Computed results (engine always works per-night) ────────────────────────
   const computedResults = useMemo(
     () =>
       rows.map((r) =>
         compute({
-          tboGross: num(r.tbo),
-          competitors: [num(r.mmt), num(r.goibibo), num(r.booking)],
+          tboGross: toNight(num(r.tbo), r),
+          competitors: [toNight(num(r.mmt), r), toNight(num(r.goibibo), r), toNight(num(r.booking), r)],
           opexPct: opexPct / 100,
           rewardPct: rewardPct / 100,
         })
@@ -176,6 +205,8 @@ export default function Page() {
   // ── Row operations ──────────────────────────────────────────────────────────
   const update = (id: number, field: keyof Row, value: string) =>
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+  const setMode = (id: number, mode: CostMode) =>
+    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, mode } : r)));
   const addRow = () => { const r = blankRow(); setRows((rs) => [...rs, r]); setSelectedRowId(r.id); };
   const removeRow = (id: number) => {
     setRows((rs) => {
@@ -194,6 +225,9 @@ export default function Page() {
     r.mmt     = h.mmt     ? String(h.mmt)     : "";
     r.goibibo = h.goibibo ? String(h.goibibo) : "";
     r.booking = h.booking ? String(h.booking) : "";
+    r.checkIn = h.check_in ?? "";
+    r.nights  = h.nights ? String(h.nights) : "1";
+    r.mode    = "night"; // history is stored per-night
     setRows((rs) => [r, ...rs]);
     setSelectedRowId(r.id);
     setPortfolioTab("hotel");
@@ -216,8 +250,9 @@ export default function Page() {
     let gtv = 0, gp = 0, opex = 0, reward = 0, net = 0, n = 0;
     for (const { res, row } of results) {
       if (num(row.tbo) > 0 && res.cheapestCompetitor !== null) {
-        gtv += res.sellingPrice; gp += res.grossProfit;
-        opex += res.opex; reward += res.rewardCost; net += res.netProfit; n++;
+        const nights = nightsOf(row); // scale per-night engine output to the whole stay
+        gtv += res.sellingPrice * nights; gp += res.grossProfit * nights;
+        opex += res.opex * nights; reward += res.rewardCost * nights; net += res.netProfit * nights; n++;
       }
     }
     return { gtv, gp, opex, reward, net, n };
@@ -260,23 +295,23 @@ export default function Page() {
             <span className="unit">%</span>
           </div>
         </label>
-        <div className="ctrl note">Slab set by selling price &middot; &le;&#8377;1k nil &middot; &le;&#8377;7.5k 5% no&nbsp;ITC &middot; &gt;&#8377;7.5k 18% +ITC</div>
+        <div className="ctrl note">Slab set by per-night selling price &middot; &le;&#8377;1k nil &middot; &le;&#8377;7.5k 5% no&nbsp;ITC &middot; &gt;&#8377;7.5k 18% +ITC</div>
       </section>
 
       {/* ── Ledger ────────────────────────────────────────────────────────── */}
       <div className="ledger" ref={ledgerRef}>
         <div className="lhead">
-          <div className="lh hotel">Hotel</div>
+          <div className="lh hotel">Hotel &amp; dates</div>
           <div className="lh group cost">
             <span className="grp-title">Supplier</span>
-            <div className="grp-cells"><span>TBO gross → base + GST</span></div>
+            <div className="grp-cells"><span>TBO → base + GST</span></div>
           </div>
           <div className="lh group comp">
-            <span className="grp-title">Competitor all-in</span>
+            <span className="grp-title">Competitor</span>
             <div className="grp-cells three"><span>MMT</span><span>Goibibo</span><span>Booking</span></div>
           </div>
           <div className="lh group out">
-            <span className="grp-title">Result</span>
+            <span className="grp-title">Result (per night)</span>
             <div className="grp-cells out-cells">
               <span>Sell @</span><span>Markup</span><span>GST</span><span>Net profit</span><span>Margin</span><span>Max reward</span>
             </div>
@@ -291,6 +326,8 @@ export default function Page() {
           const loss = live && res.netProfit < 0;
           const rewardExceedsMax = live && rewardPct / 100 > res.maxRewardPct + 1e-9;
           const isSelected = row.id === selectedRowId;
+          const n = nightsOf(row);
+          const perNightTbo = toNight(num(row.tbo), row);
           return (
             <div
               className={"lrow" + (isSelected ? " lrow-selected" : "")}
@@ -303,7 +340,26 @@ export default function Page() {
                   placeholder="Name / city"
                   value={row.hotel}
                   onChange={(e) => update(row.id, "hotel", e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
                 />
+                <div className="date-nights" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    className="date-in"
+                    type="date"
+                    value={row.checkIn}
+                    onChange={(e) => update(row.id, "checkIn", e.target.value)}
+                    title="Check-in date"
+                  />
+                  <div className="nights-in">
+                    <input
+                      inputMode="numeric"
+                      value={row.nights}
+                      onChange={(e) => update(row.id, "nights", e.target.value)}
+                      title="Number of nights"
+                    />
+                    <span>nt</span>
+                  </div>
+                </div>
                 {hasCost && (
                   <span className="slab-tag" data-itc={res.itcApplies}>
                     {res.itcApplies ? "ITC" : "no ITC"} &middot; {pct(res.sellSlab.rate)}
@@ -311,10 +367,20 @@ export default function Page() {
                 )}
               </div>
 
-              <div className="cell cost">
+              <div className="cell cost" onClick={(e) => e.stopPropagation()}>
+                <div className="mode-toggle">
+                  <button className={row.mode === "night" ? "on" : ""} onClick={() => setMode(row.id, "night")}>Per night</button>
+                  <button className={row.mode === "total" ? "on" : ""} onClick={() => setMode(row.id, "total")}>Total stay</button>
+                </div>
                 <NumCell value={row.tbo} onChange={(v) => update(row.id, "tbo", v)} placeholder="0" />
                 {hasCost && (
                   <div className="tbo-breakdown">
+                    {row.mode === "total" && n > 1 && (
+                      <div className="tbo-br-row derived">
+                        <span className="tbo-br-label">÷ {n} nights</span>
+                        <span className="tbo-br-val">{fmt(perNightTbo)}/nt</span>
+                      </div>
+                    )}
                     <div className="tbo-br-row">
                       <span className="tbo-br-label">Base</span>
                       <span className="tbo-br-val">{fmt(res.tboBase)}</span>
@@ -334,10 +400,10 @@ export default function Page() {
                 )}
               </div>
 
-              <div className="cell comp three">
-                <NumCell value={row.mmt}     onChange={(v) => update(row.id, "mmt", v)}     placeholder="&mdash;" muted={res.cheapestCompetitor !== num(row.mmt)     || !num(row.mmt)} />
-                <NumCell value={row.goibibo} onChange={(v) => update(row.id, "goibibo", v)} placeholder="&mdash;" muted={res.cheapestCompetitor !== num(row.goibibo) || !num(row.goibibo)} />
-                <NumCell value={row.booking} onChange={(v) => update(row.id, "booking", v)} placeholder="&mdash;" muted={res.cheapestCompetitor !== num(row.booking) || !num(row.booking)} />
+              <div className="cell comp three" onClick={(e) => e.stopPropagation()}>
+                <NumCell value={row.mmt}     onChange={(v) => update(row.id, "mmt", v)}     placeholder="&mdash;" muted={res.cheapestCompetitor !== toNight(num(row.mmt), row)     || !num(row.mmt)} />
+                <NumCell value={row.goibibo} onChange={(v) => update(row.id, "goibibo", v)} placeholder="&mdash;" muted={res.cheapestCompetitor !== toNight(num(row.goibibo), row) || !num(row.goibibo)} />
+                <NumCell value={row.booking} onChange={(v) => update(row.id, "booking", v)} placeholder="&mdash;" muted={res.cheapestCompetitor !== toNight(num(row.booking), row) || !num(row.booking)} />
               </div>
 
               <div className="cell out out-cells">
@@ -384,7 +450,7 @@ export default function Page() {
           {portfolioTab === "blended" && totals.n > 0 && (
             <div className="blended-body">
               <div className="tgrid">
-                <Tot label="GTV"                   value={fmt(totals.gtv)} />
+                <Tot label="GTV (stay totals)"      value={fmt(totals.gtv)} />
                 <Tot label="Gross profit (markup)"  value={fmt(totals.gp)} />
                 <Tot label="OPEX"                   value={"−" + fmt(totals.opex)} />
                 <Tot label="Reward given"           value={"−" + fmt(totals.reward)} />
@@ -419,14 +485,15 @@ export default function Page() {
               <div className="history-table">
                 <div className="ht-head">
                   <span>Hotel</span>
-                  <span>TBO gross</span>
+                  <span>Check-in</span>
+                  <span>TBO/nt</span>
                   <span>Base</span>
                   <span>GST</span>
                   <span>Slab</span>
                   <span>Sell @</span>
                   <span>Net profit</span>
                   <span>Margin</span>
-                  <span>Last updated</span>
+                  <span>Updated</span>
                 </div>
                 {filteredHistory.map((h) => (
                   <div
@@ -436,6 +503,7 @@ export default function Page() {
                     title="Click to load into board"
                   >
                     <span className="ht-name">{h.hotel_name}<em className="ht-load-hint">↑ load</em></span>
+                    <span className="ht-date">{h.check_in ? fmtDate(h.check_in) : "—"}</span>
                     <span className="ht-mono">{fmt(h.tbo_gross)}</span>
                     <span className="ht-mono">{fmt(h.tbo_base)}</span>
                     <span className="ht-mono dim">{fmt(h.tbo_gst)}</span>
@@ -457,7 +525,7 @@ export default function Page() {
       </section>
 
       <footer className="foot">
-        <p>Markup is solved so your all-in price exactly matches the cheapest competitor entered. ITC case marks up on TBO base; no-ITC case marks up on TBO gross. Slab is set by the value of supply (your selling price), per GST 2.0 effective 22 Sep 2025.</p>
+        <p>Markup is solved so your all-in price exactly matches the cheapest competitor entered. Prices can be entered per-night or for the whole stay; the engine converts everything to per-night, because the GST slab is set by the per-night value of supply, per GST 2.0 effective 22 Sep 2025. ITC case marks up on TBO base; no-ITC case marks up on TBO gross.</p>
       </footer>
     </div>
   );
@@ -468,11 +536,14 @@ function HotelDetail({ row, res, opexPct, rewardPct }: { row: Row; res: Result; 
   const hasCost = num(row.tbo) > 0;
   const live = hasCost && res.cheapestCompetitor !== null;
   const loss = live && res.netProfit < 0;
+  const n = nightsOf(row);
+  const multiNight = n > 1;
 
   return (
     <div className="hotel-detail">
       <div className="hd-header">
         <span className="hd-name">{row.hotel || <em className="hd-unnamed">Unnamed hotel</em>}</span>
+        {row.checkIn && <span className="hd-date-chip">{fmtDate(row.checkIn)} · {n} night{n > 1 ? "s" : ""}</span>}
         {hasCost && (
           <span className="slab-tag" data-itc={res.itcApplies}>
             {res.itcApplies ? "ITC" : "no ITC"} &middot; {pct(res.sellSlab.rate)}
@@ -483,8 +554,8 @@ function HotelDetail({ row, res, opexPct, rewardPct }: { row: Row; res: Result; 
       <div className="hd-grid">
         {/* Cost breakdown */}
         <div className="hd-group">
-          <div className="hd-group-label">TBO Cost</div>
-          <HdCell label="Gross (incl. GST)" value={hasCost ? fmt(num(row.tbo)) : "—"} />
+          <div className="hd-group-label">TBO Cost / night</div>
+          <HdCell label="Gross (incl. GST)" value={hasCost ? fmt(toNight(num(row.tbo), row)) : "—"} />
           <HdCell label="Base (net of GST)"  value={hasCost ? fmt(res.tboBase) : "—"} />
           <HdCell
             label={`GST ${pct(res.tboSlab.rate)}`}
@@ -496,7 +567,7 @@ function HotelDetail({ row, res, opexPct, rewardPct }: { row: Row; res: Result; 
 
         {/* Pricing */}
         <div className="hd-group">
-          <div className="hd-group-label">Pricing</div>
+          <div className="hd-group-label">Pricing / night</div>
           <HdCell label="Sell price"     value={live ? fmt(res.sellingPrice) : "—"} big />
           <HdCell label="Markup"         value={live ? fmt(res.markup) : "—"} sub={live ? pct(res.markupPct) + " on cost" : ""} />
           <HdCell label="GST on markup"  value={live ? fmt(res.gstOnMarkup) : "—"} sub="collected & remitted" />
@@ -504,7 +575,7 @@ function HotelDetail({ row, res, opexPct, rewardPct }: { row: Row; res: Result; 
 
         {/* P&L */}
         <div className="hd-group">
-          <div className="hd-group-label">P&amp;L</div>
+          <div className="hd-group-label">P&amp;L / night</div>
           <HdCell label="Gross profit"  value={live ? fmt(res.grossProfit) : "—"} />
           <HdCell label={`OPEX (${opexPct}%)`} value={live ? "−" + fmt(res.opex) : "—"} />
           <HdCell label={`Reward (${rewardPct}%)`} value={live ? "−" + fmt(res.rewardCost) : "—"} />
@@ -512,21 +583,30 @@ function HotelDetail({ row, res, opexPct, rewardPct }: { row: Row; res: Result; 
           <HdCell label="Net margin"    value={live ? pct(res.netMarginPct) : "—"} tone={live ? (loss ? "neg" : "pos") : undefined} />
         </div>
 
-        {/* Reward headroom */}
-        <div className="hd-group">
-          <div className="hd-group-label">Reward headroom</div>
-          <HdCell label="Max reward (break-even)" value={live ? pct(res.maxRewardPct) : "—"} big />
-          <HdCell label="Current reward"          value={pct(rewardPct / 100)} />
-          {live && (
-            <HdCell
-              label="Headroom left"
-              value={res.maxRewardPct - rewardPct / 100 >= 0
-                ? pct(res.maxRewardPct - rewardPct / 100)
-                : "Over break-even"}
-              tone={res.maxRewardPct - rewardPct / 100 >= 0 ? "pos" : "neg"}
-            />
-          )}
-        </div>
+        {/* Stay total or reward headroom */}
+        {multiNight ? (
+          <div className="hd-group hd-group-accent">
+            <div className="hd-group-label">Whole stay ({n} nights)</div>
+            <HdCell label="Sell (all-in)" value={live ? fmt(res.sellingPrice * n) : "—"} big />
+            <HdCell label="Net profit"    value={live ? fmt(res.netProfit * n) : "—"} tone={live ? (loss ? "neg" : "pos") : undefined} big />
+            <HdCell label="Max reward"    value={live ? pct(res.maxRewardPct) : "—"} />
+          </div>
+        ) : (
+          <div className="hd-group">
+            <div className="hd-group-label">Reward headroom</div>
+            <HdCell label="Max reward (break-even)" value={live ? pct(res.maxRewardPct) : "—"} big />
+            <HdCell label="Current reward"          value={pct(rewardPct / 100)} />
+            {live && (
+              <HdCell
+                label="Headroom left"
+                value={res.maxRewardPct - rewardPct / 100 >= 0
+                  ? pct(res.maxRewardPct - rewardPct / 100)
+                  : "Over break-even"}
+                tone={res.maxRewardPct - rewardPct / 100 >= 0 ? "pos" : "neg"}
+              />
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -568,4 +648,3 @@ function Tot({ label, value, tone, big }: {
     </div>
   );
 }
-

@@ -33,6 +33,9 @@ export async function POST(req: Request) {
     markup,
     net_profit,
     net_margin_pct,
+    check_in,
+    nights,
+    cost_mode,
   } = body;
 
   const name = (hotel_name as string).trim().toLowerCase();
@@ -52,6 +55,7 @@ export async function POST(req: Request) {
       .update({
         tbo_gross, tbo_base, tbo_gst, tbo_slab_label, itc_applies,
         mmt, goibibo, booking, sell_price, markup, net_profit, net_margin_pct,
+        check_in, nights, cost_mode,
         updated_at: new Date().toISOString(),
       })
       .eq("id", existing.id);
@@ -61,6 +65,7 @@ export async function POST(req: Request) {
       hotel_name: hotel_name.trim(),
       tbo_gross, tbo_base, tbo_gst, tbo_slab_label, itc_applies,
       mmt, goibibo, booking, sell_price, markup, net_profit, net_margin_pct,
+      check_in, nights, cost_mode,
     });
   }
 

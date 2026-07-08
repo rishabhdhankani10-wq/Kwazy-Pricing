@@ -362,7 +362,7 @@ export default function Page() {
                 </div>
                 {hasCost && (
                   <span className="slab-tag" data-itc={res.itcApplies}>
-                    {res.itcApplies ? "ITC" : "no ITC"} &middot; {pct(res.sellSlab.rate)}
+                    sell {pct(res.sellSlab.rate)} &middot; {res.itcApplies ? "input ITC ✓" : "5% stuck"}
                   </span>
                 )}
               </div>
@@ -546,7 +546,7 @@ function HotelDetail({ row, res, opexPct, rewardPct }: { row: Row; res: Result; 
         {row.checkIn && <span className="hd-date-chip">{fmtDate(row.checkIn)} · {n} night{n > 1 ? "s" : ""}</span>}
         {hasCost && (
           <span className="slab-tag" data-itc={res.itcApplies}>
-            {res.itcApplies ? "ITC" : "no ITC"} &middot; {pct(res.sellSlab.rate)}
+            sell {pct(res.sellSlab.rate)} &middot; {res.itcApplies ? "input ITC ✓" : "5% stuck"}
           </span>
         )}
       </div>

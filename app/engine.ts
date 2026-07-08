@@ -60,86 +60,56 @@ export type Result = {
   undercut: number;        // how far below cheapest competitor we sit (>=0 means we win)
 };
 
-// Compute the all-in selling price given a markup, accounting for ITC rules.
-// Returns selling price and the components.
-function priceFromMarkup(tboGross: number, markup: number) {
-  // First guess slab from a provisional selling price to decide ITC treatment.
-  // We iterate because the slab depends on the final price.
-  // Start assuming markup base = tboGross (no-ITC case), refine.
-  let sellingPrice = tboGross + markup; // provisional
-  for (let i = 0; i < 5; i++) {
-    const slab = slabForPrice(sellingPrice);
-    if (slab.itc) {
-      // ITC case: markup base is TBO base (net of TBO's tax), tax reclaimed.
-      // We mark up on the base, then charge GST on the markup.
-      const tboBase = tboGross / (1 + slab.rate);
-      const newSelling = tboBase + markup + markup * slab.rate;
-      if (Math.abs(newSelling - sellingPrice) < 0.001) { sellingPrice = newSelling; break; }
-      sellingPrice = newSelling;
-    } else {
-      // No-ITC case: markup base is TBO gross (tax embedded, unrecoverable).
-      const newSelling = tboGross + markup + markup * slab.rate;
-      if (Math.abs(newSelling - sellingPrice) < 0.001) { sellingPrice = newSelling; break; }
-      sellingPrice = newSelling;
-    }
-  }
-  return sellingPrice;
-}
-
-// Solve for the max markup such that selling price <= target (cheapest competitor).
-// Monotonic in markup, so binary search.
-function solveMarkupForTarget(tboGross: number, target: number): number {
-  let lo = 0;
-  let hi = target; // markup can't exceed target
-  for (let i = 0; i < 60; i++) {
-    const mid = (lo + hi) / 2;
-    const price = priceFromMarkup(tboGross, mid);
-    if (price <= target) lo = mid;
-    else hi = mid;
-  }
-  return lo;
-}
-
 export function compute(inputs: Inputs): Result {
   const { tboGross, competitors, opexPct, rewardPct } = inputs;
 
   const valid = competitors.filter((c) => c > 0);
   const cheapestCompetitor = valid.length ? Math.min(...valid) : null;
 
-  // Determine markup: if we have a competitor, price to just match the cheapest.
-  // If no competitor, default markup = 0 (user can read the floor; tool still shows P&L).
-  let markup = 0;
-  if (cheapestCompetitor !== null) {
-    markup = solveMarkupForTarget(tboGross, cheapestCompetitor);
-  }
-
-  const sellingPrice = cheapestCompetitor !== null
-    ? priceFromMarkup(tboGross, markup)
-    : tboGross; // degenerate: no markup headroom known
-
-  const sellSlab = slabForPrice(sellingPrice);
+  // ── PURCHASE LEG (TBO → us) ────────────────────────────────────────────────
+  // The slab TBO charged us is set by the per-night price TBO billed.
   const tboSlab = slabForPrice(tboGross);
-  const itcApplies = sellSlab.itc;
-
-  // Decompose TBO gross
   const tboBase = tboGross / (1 + tboSlab.rate);
   const tboEmbeddedGst = tboGross - tboBase;
+
+  // ITC on the PURCHASE depends on how the PURCHASE was taxed — NOT on how we
+  // resell it. GST 2.0: 5% hotel slab carries NO ITC; only the 18% slab does.
+  // So a room bought at <=7,500/night (5%) leaves its GST stuck in our cost,
+  // even if we later sell it above 7,500.
+  const itcApplies = tboSlab.itc;
   const tboRecoverableGst = itcApplies ? tboEmbeddedGst : 0;
 
+  // True cost basis: if the input GST is creditable, our cost is the base;
+  // otherwise the tax sticks and our real cost is the full gross.
   const trueCost = itcApplies ? tboBase : tboGross;
   const markupBase = trueCost;
+
+  // ── SELL LEG (us → customer) ───────────────────────────────────────────────
+  // We price to exactly match the cheapest competitor entered, so the selling
+  // price is known directly (no iteration).
+  //
+  // Kwazy is liable for GST ONLY on the markup it adds — the room itself passes
+  // through at our true cost. So the all-in selling price decomposes as:
+  //     sellingPrice = trueCost + markup + (markup * sellRate)
+  //   => markup = (sellingPrice - trueCost) / (1 + sellRate)
+  const sellingPrice = cheapestCompetitor !== null ? cheapestCompetitor : tboGross;
+  const sellSlab = slabForPrice(sellingPrice);
+
+  const markup = cheapestCompetitor !== null
+    ? (sellingPrice - trueCost) / (1 + sellSlab.rate)
+    : 0;
   const markupPct = markupBase > 0 ? markup / markupBase : 0;
 
+  // We remit GST only on our own markup, at the output slab rate.
   const gstOnMarkup = markup * sellSlab.rate;
 
-  // Gross profit = the markup we retain. The GST on markup is collected and remitted,
-  // so it is not profit. In the ITC case the embedded TBO GST is reclaimed (washes out),
-  // so trueCost already excludes it. Gross profit is simply the markup.
+  // Gross profit = the markup we retain. Input GST is already handled in trueCost
+  // (recovered as ITC when the purchase was >7,500; a stuck cost when <=7,500).
   const grossProfit = markup;
 
   const opex = sellingPrice * opexPct;
   const rewardCost = sellingPrice * rewardPct;
-  const netProfit = grossProfit - opex - rewardCost;
+  const netProfit = cheapestCompetitor !== null ? grossProfit - opex - rewardCost : 0;
   const netMarginPct = sellingPrice > 0 ? netProfit / sellingPrice : 0;
 
   // Max reward at break-even: netProfit = 0 => rewardCost = grossProfit - opex

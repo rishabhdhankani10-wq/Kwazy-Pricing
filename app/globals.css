@@ -503,10 +503,10 @@ html, body {
 .bslot-table { overflow-x: auto; }
 .bslot-row {
   display: grid;
-  grid-template-columns: 1.5fr 1.1fr 0.9fr 0.9fr 0.9fr 0.9fr 0.7fr 0.8fr 0.7fr;
+  grid-template-columns: 1.4fr 1.05fr 1.05fr 0.9fr 0.9fr 0.9fr 0.9fr 0.7fr 0.8fr 0.7fr;
   gap: 6px;
   align-items: center;
-  min-width: 760px;
+  min-width: 880px;
   padding: 4px 0;
 }
 .bslot-header {

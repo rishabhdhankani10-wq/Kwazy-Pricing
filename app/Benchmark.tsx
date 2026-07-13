@@ -23,6 +23,7 @@ export const SEASON_SLOTS = [
 export type BSlot = {
   slot: string;            // matches a SEASON_SLOTS key
   checkIn: string;         // manual
+  checkOut: string;        // manual
   recordedAt: string;      // auto today
   tbo: string;
   mmt: string;
@@ -52,6 +53,7 @@ let bId = 1;
 export const blankSlot = (slotKey: string): BSlot => ({
   slot: slotKey,
   checkIn: "",
+  checkOut: "",
   recordedAt: today(),
   tbo: "",
   mmt: "",
@@ -237,6 +239,7 @@ export default function Benchmark({
                 <div className="bslot-row bslot-header">
                   <span>Season slot</span>
                   <span>Check-in</span>
+                  <span>Check-out</span>
                   <span>TBO</span>
                   <span>MMT</span>
                   <span>Goibibo</span>
@@ -259,6 +262,13 @@ export default function Benchmark({
                         type="date"
                         value={s.checkIn}
                         onChange={(e) => updateSlot(p.id, meta.key, "checkIn", e.target.value)}
+                      />
+                      <input
+                        className="bslot-date"
+                        type="date"
+                        value={s.checkOut ?? ""}
+                        min={s.checkIn || undefined}
+                        onChange={(e) => updateSlot(p.id, meta.key, "checkOut", e.target.value)}
                       />
                       <BInput value={s.tbo}     onChange={(v) => updateSlot(p.id, meta.key, "tbo", v)} />
                       <BInput value={s.mmt}     onChange={(v) => updateSlot(p.id, meta.key, "mmt", v)} />

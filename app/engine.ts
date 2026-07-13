@@ -95,8 +95,16 @@ export function compute(inputs: Inputs): Result {
   const sellingPrice = cheapestCompetitor !== null ? cheapestCompetitor : tboGross;
   const sellSlab = slabForPrice(sellingPrice);
 
+  // ITC case (>7,500): you reclaim TBO's GST, add markup on the base, and charge
+  //   output GST on the FULL (base + markup):  S = (base + markup)(1 + r)
+  //   => markup = S/(1+r) - base
+  // No-ITC case (<=7,500): TBO's tax is stuck in your cost; you charge GST only
+  //   on the markup you add:  S = gross + markup(1 + r)
+  //   => markup = (S - gross)/(1+r)
   const markup = cheapestCompetitor !== null
-    ? (sellingPrice - trueCost) / (1 + sellSlab.rate)
+    ? (itcApplies
+        ? sellingPrice / (1 + sellSlab.rate) - trueCost
+        : (sellingPrice - trueCost) / (1 + sellSlab.rate))
     : 0;
   const markupPct = markupBase > 0 ? markup / markupBase : 0;
 

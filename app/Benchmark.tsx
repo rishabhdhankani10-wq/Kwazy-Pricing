@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { compute, pct } from "./engine";
+import { compute, fmt, pct } from "./engine";
 
 // ── Default sampling frame (user can add more cities) ───────────────────────
 export const CITY_BUCKETS = [
@@ -49,6 +49,15 @@ const num = (s: string) => {
 
 export const today = () => new Date().toISOString().slice(0, 10);
 
+// Nights between check-in and check-out (default 1 night if not a valid range).
+export const slotNights = (checkIn: string, checkOut: string): number => {
+  if (!checkIn || !checkOut) return 1;
+  const a = new Date(checkIn).getTime();
+  const b = new Date(checkOut).getTime();
+  if (isNaN(a) || isNaN(b) || b <= a) return 1;
+  return Math.max(1, Math.round((b - a) / 86_400_000));
+};
+
 let bId = 1;
 export const blankSlot = (slotKey: string): BSlot => ({
   slot: slotKey,
@@ -86,10 +95,14 @@ const median = (xs: number[]): number | null => {
 const mean = (xs: number[]): number | null =>
   xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null;
 
-// Markup% (of cost) for one slot, using its own dynamic reward.
+// Prices are entered as the STAY TOTAL; convert to per-night (÷ nights) before
+// picking the GST slab, because the slab is set by the per-night value of supply.
 function slotMarkupPct(slot: BSlot, opexPct: number, globalReward: number): number | null {
-  const tbo = num(slot.tbo);
-  const comps = [num(slot.mmt), num(slot.goibibo), num(slot.booking)].filter((c) => c > 0);
+  const nights = slotNights(slot.checkIn, slot.checkOut);
+  const tbo = num(slot.tbo) / nights;
+  const comps = [num(slot.mmt), num(slot.goibibo), num(slot.booking)]
+    .map((c) => c / nights)
+    .filter((c) => c > 0);
   if (!tbo || comps.length === 0) return null;
   const rewardPct = (num(slot.reward) || globalReward) / 100;
   const res = compute({ tboGross: tbo, competitors: comps, opexPct: opexPct / 100, rewardPct });
@@ -251,11 +264,15 @@ export default function Benchmark({
                 {SEASON_SLOTS.map((meta) => {
                   const s = p.slots.find((x) => x.slot === meta.key) ?? blankSlot(meta.key);
                   const mk = slotMarkupPct(s, opexPct, globalReward);
+                  const nights = slotNights(s.checkIn, s.checkOut);
+                  const perNt = num(s.tbo) && nights > 1 ? num(s.tbo) / nights : null;
                   return (
                     <div className="bslot-row" key={meta.key}>
                       <span className="bslot-label">
                         {meta.label}
-                        <em className="bslot-rec">rec {s.recordedAt || today()}</em>
+                        <em className="bslot-rec">
+                          {nights > 1 ? `${nights} nt · ${fmt(perNt!)}/nt` : `rec ${s.recordedAt || today()}`}
+                        </em>
                       </span>
                       <input
                         className="bslot-date"

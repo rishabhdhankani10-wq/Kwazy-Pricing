@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { compute, fmt, pct } from "./engine";
+import DateRange from "./DateRange";
 
 // ── Default sampling frame (user can add more cities) ───────────────────────
 export const CITY_BUCKETS = [
@@ -140,6 +141,20 @@ export default function Benchmark({
       )
     );
 
+  const updateSlotDates = (propId: number, slotKey: string, from: string, to: string) =>
+    setBenchmark((b) =>
+      b.map((p) =>
+        p.id !== propId
+          ? p
+          : {
+              ...p,
+              slots: p.slots.map((s) =>
+                s.slot === slotKey ? { ...s, checkIn: from, checkOut: to } : s
+              ),
+            }
+      )
+    );
+
   const updateProp = (propId: number, field: "name" | "city", value: string) =>
     setBenchmark((b) => b.map((p) => (p.id === propId ? { ...p, [field]: value } : p)));
 
@@ -251,8 +266,7 @@ export default function Benchmark({
               <div className="bslot-table">
                 <div className="bslot-row bslot-header">
                   <span>Season slot</span>
-                  <span>Check-in</span>
-                  <span>Check-out</span>
+                  <span>Dates</span>
                   <span>TBO</span>
                   <span>MMT</span>
                   <span>Goibibo</span>
@@ -274,18 +288,11 @@ export default function Benchmark({
                           {nights > 1 ? `${nights} nt · ${fmt(perNt!)}/nt` : `rec ${s.recordedAt || today()}`}
                         </em>
                       </span>
-                      <input
-                        className="bslot-date"
-                        type="date"
-                        value={s.checkIn}
-                        onChange={(e) => updateSlot(p.id, meta.key, "checkIn", e.target.value)}
-                      />
-                      <input
-                        className="bslot-date"
-                        type="date"
-                        value={s.checkOut ?? ""}
-                        min={s.checkIn || undefined}
-                        onChange={(e) => updateSlot(p.id, meta.key, "checkOut", e.target.value)}
+                      <DateRange
+                        compact
+                        checkIn={s.checkIn}
+                        checkOut={s.checkOut ?? ""}
+                        onChange={(f, t) => updateSlotDates(p.id, meta.key, f, t)}
                       />
                       <BInput value={s.tbo}     onChange={(v) => updateSlot(p.id, meta.key, "tbo", v)} />
                       <BInput value={s.mmt}     onChange={(v) => updateSlot(p.id, meta.key, "mmt", v)} />

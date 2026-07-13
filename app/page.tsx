@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { compute, fmt, pct, type Result } from "./engine";
 import Benchmark, { type BProperty, seedBenchmark } from "./Benchmark";
+import DateRange from "./DateRange";
 
 type CostMode = "night" | "total";
 type View = "desk" | "benchmark";
@@ -131,14 +132,6 @@ export default function Page() {
       .catch(() => setSessionLoaded(true));
   }, []);
 
-  // ── Auto-select first row with data ────────────────────────────────────────
-  useEffect(() => {
-    if (selectedRowId === null) {
-      const first = rows.find((r) => num(r.tbo) > 0);
-      if (first) setSelectedRowId(first.id);
-    }
-  }, [rows, selectedRowId]);
-
   // ── Load hotel history ──────────────────────────────────────────────────────
   const loadHistory = useCallback(() => {
     fetch("/api/hotels")
@@ -240,6 +233,16 @@ export default function Page() {
     );
   const setMode = (id: number, mode: CostMode) =>
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, mode } : r)));
+  const updateDates = (id: number, from: string, to: string) =>
+    setRows((rs) =>
+      rs.map((r) => {
+        if (r.id !== id) return r;
+        const next = { ...r, checkIn: from, checkOut: to };
+        const n = nightsBetween(from, to);
+        if (n !== null) next.nights = String(n);
+        return next;
+      })
+    );
   const addRow = () => { const r = blankRow(); setRows((rs) => [...rs, r]); setSelectedRowId(r.id); };
   const removeRow = (id: number) => {
     setRows((rs) => {
@@ -274,10 +277,12 @@ export default function Page() {
     [rows, computedResults]
   );
 
-  const selectedEntry = useMemo(
-    () => results.find(({ row }) => row.id === selectedRowId) ?? null,
-    [results, selectedRowId]
-  );
+  // Selected row, falling back to the first row that has a cost entered.
+  const selectedEntry = useMemo(() => {
+    const byId = results.find(({ row }) => row.id === selectedRowId);
+    if (byId) return byId;
+    return results.find(({ row }) => num(row.tbo) > 0) ?? null;
+  }, [results, selectedRowId]);
 
   const totals = useMemo(() => {
     let gtv = 0, gp = 0, opex = 0, reward = 0, net = 0, n = 0;
@@ -386,21 +391,10 @@ export default function Page() {
                   onClick={(e) => e.stopPropagation()}
                 />
                 <div className="date-nights" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    className="date-in"
-                    type="date"
-                    value={row.checkIn}
-                    onChange={(e) => update(row.id, "checkIn", e.target.value)}
-                    title="Check-in date"
-                  />
-                  <span className="date-arrow">→</span>
-                  <input
-                    className="date-in"
-                    type="date"
-                    value={row.checkOut}
-                    min={row.checkIn || undefined}
-                    onChange={(e) => update(row.id, "checkOut", e.target.value)}
-                    title="Check-out date"
+                  <DateRange
+                    checkIn={row.checkIn}
+                    checkOut={row.checkOut}
+                    onChange={(f, t) => updateDates(row.id, f, t)}
                   />
                   <div className="nights-in" data-auto={!!nightsBetween(row.checkIn, row.checkOut)}>
                     <input

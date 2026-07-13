@@ -15,6 +15,13 @@
 
 * { box-sizing: border-box; }
 
+/* Smoothness: isolate row-level layout/paint so typing in one row doesn't
+   force the whole page to recalc, and give the wide tables momentum scroll. */
+.lrow { contain: layout style; }
+.bench-city { contain: layout style; }
+.bslot-table, .history-table { -webkit-overflow-scrolling: touch; scroll-behavior: smooth; }
+input, button { -webkit-tap-highlight-color: transparent; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -503,10 +510,10 @@ html, body {
 .bslot-table { overflow-x: auto; }
 .bslot-row {
   display: grid;
-  grid-template-columns: 1.4fr 1.05fr 1.05fr 0.9fr 0.9fr 0.9fr 0.9fr 0.7fr 0.8fr 0.7fr;
+  grid-template-columns: 1.4fr 1.35fr 0.9fr 0.9fr 0.9fr 0.9fr 0.7fr 0.8fr 0.7fr;
   gap: 6px;
   align-items: center;
-  min-width: 880px;
+  min-width: 820px;
   padding: 4px 0;
 }
 .bslot-header {
@@ -606,6 +613,48 @@ html, body {
 .nights-in[data-auto="true"] { border-color: var(--green); background: #eef5f0; }
 .nights-in[data-auto="true"] input { color: var(--green); }
 .date-arrow { color: var(--ink-soft); font-size: 12px; }
+
+/* Date-range picker */
+.drange { position: relative; }
+.drange-btn {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 4px;
+  padding: 5px 9px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color .12s, background .12s;
+}
+.drange-btn:hover { border-color: var(--line-2); }
+.drange-btn.empty { color: var(--ink-soft); }
+.drange-btn.compact { padding: 4px 7px; font-size: 10.5px; }
+.drange-pop {
+  position: fixed;
+  z-index: 100;
+  background: var(--white);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(28, 35, 48, 0.16);
+  padding: 6px;
+}
+/* Theme react-day-picker to match the paper/ink palette */
+.rdp-root {
+  --rdp-accent-color: var(--oxblood);
+  --rdp-accent-background-color: #f0ede5;
+  --rdp-today-color: var(--gold);
+  --rdp-font-family: 'Inter', sans-serif;
+  --rdp-day-width: 34px;
+  --rdp-day-height: 34px;
+  --rdp-day_button-width: 34px;
+  --rdp-day_button-height: 34px;
+  margin: 0;
+  font-size: 13px;
+}
+.rdp-range_middle { background: var(--rdp-accent-background-color); }
 
 /* Per-night / total toggle */
 .mode-toggle {

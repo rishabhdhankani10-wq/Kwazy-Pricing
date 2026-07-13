@@ -2,8 +2,10 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { compute, fmt, pct, type Result } from "./engine";
+import Benchmark, { type BProperty, seedBenchmark } from "./Benchmark";
 
 type CostMode = "night" | "total";
+type View = "desk" | "benchmark";
 
 type Row = {
   id: number;
@@ -15,6 +17,7 @@ type Row = {
   checkIn: string;   // ISO date string, optional
   nights: string;    // number of nights (default "1")
   mode: CostMode;    // are the prices entered per-night or for the whole stay
+  reward: string;    // per-row reward override (%) — blank = use global
 };
 
 type HotelRecord = {
@@ -52,6 +55,7 @@ const blankRow = (): Row => ({
   checkIn: "",
   nights: "1",
   mode: "night",
+  reward: "",
 });
 
 const num = (s: string) => {
@@ -80,6 +84,8 @@ export default function Page() {
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [selectedRowId, setSelectedRowId] = useState<number | null>(null);
   const [portfolioTab, setPortfolioTab] = useState<PortfolioTab>("hotel");
+  const [view, setView] = useState<View>("desk");
+  const [benchmark, setBenchmark] = useState<BProperty[]>(seedBenchmark);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hotelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,10 +105,14 @@ export default function Page() {
             checkIn: r.checkIn ?? "",
             nights: r.nights ?? "1",
             mode: (r.mode as CostMode) ?? "night",
+            reward: r.reward ?? "",
           }));
           setRows(loaded);
           if (data.opex_pct != null) setOpexPct(Number(data.opex_pct));
           if (data.reward_pct != null) setRewardPct(Number(data.reward_pct));
+        }
+        if (data && Array.isArray(data.benchmark) && data.benchmark.length > 0) {
+          setBenchmark(data.benchmark);
         }
         setSessionLoaded(true);
       })
@@ -129,12 +139,12 @@ export default function Page() {
 
   // ── Auto-save board state (debounced 1.5s) ──────────────────────────────────
   const saveSession = useCallback(
-    (currentRows: Row[], currentOpex: number, currentReward: number) => {
+    (currentRows: Row[], currentOpex: number, currentReward: number, currentBenchmark: BProperty[]) => {
       setSaveStatus("saving");
       fetch("/api/session", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: currentRows, opex_pct: currentOpex, reward_pct: currentReward }),
+        body: JSON.stringify({ rows: currentRows, opex_pct: currentOpex, reward_pct: currentReward, benchmark: currentBenchmark }),
       })
         .then((r) => (r.ok ? setSaveStatus("saved") : setSaveStatus("error")))
         .catch(() => setSaveStatus("error"))
@@ -183,7 +193,7 @@ export default function Page() {
           tboGross: toNight(num(r.tbo), r),
           competitors: [toNight(num(r.mmt), r), toNight(num(r.goibibo), r), toNight(num(r.booking), r)],
           opexPct: opexPct / 100,
-          rewardPct: rewardPct / 100,
+          rewardPct: (num(r.reward) || rewardPct) / 100, // per-row reward override
         })
       ),
     [rows, opexPct, rewardPct]
@@ -193,14 +203,14 @@ export default function Page() {
   useEffect(() => {
     if (!sessionLoaded) return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => saveSession(rows, opexPct, rewardPct), 1500);
+    debounceRef.current = setTimeout(() => saveSession(rows, opexPct, rewardPct, benchmark), 1500);
     if (hotelDebounceRef.current) clearTimeout(hotelDebounceRef.current);
     hotelDebounceRef.current = setTimeout(() => { saveHotels(rows, computedResults); loadHistory(); }, 2000);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
       if (hotelDebounceRef.current) clearTimeout(hotelDebounceRef.current);
     };
-  }, [rows, opexPct, rewardPct, sessionLoaded, saveSession, saveHotels, computedResults, loadHistory]);
+  }, [rows, opexPct, rewardPct, benchmark, sessionLoaded, saveSession, saveHotels, computedResults, loadHistory]);
 
   // ── Row operations ──────────────────────────────────────────────────────────
   const update = (id: number, field: keyof Row, value: string) =>
@@ -280,6 +290,16 @@ export default function Page() {
         </div>
       </header>
 
+      <nav className="view-nav">
+        <button className={"view-tab" + (view === "desk" ? " on" : "")} onClick={() => setView("desk")}>Pricing Desk</button>
+        <button className={"view-tab" + (view === "benchmark" ? " on" : "")} onClick={() => setView("benchmark")}>Rate Benchmark</button>
+      </nav>
+
+      {view === "benchmark" && (
+        <Benchmark benchmark={benchmark} setBenchmark={setBenchmark} opexPct={opexPct} globalReward={rewardPct} />
+      )}
+
+      {view === "desk" && (<>
       <section className="controls">
         <label className="ctrl">
           <span className="ctrl-label">OPEX (% of GTV)</span>
@@ -358,6 +378,16 @@ export default function Page() {
                       title="Number of nights"
                     />
                     <span>nt</span>
+                  </div>
+                  <div className="nights-in reward-in">
+                    <input
+                      inputMode="decimal"
+                      value={row.reward}
+                      placeholder={String(rewardPct)}
+                      onChange={(e) => update(row.id, "reward", e.target.value)}
+                      title="Reward % for this room (blank = global)"
+                    />
+                    <span>rwd%</span>
                   </div>
                 </div>
                 {hasCost && (
@@ -525,8 +555,9 @@ export default function Page() {
       </section>
 
       <footer className="foot">
-        <p>Markup is solved so your all-in price exactly matches the cheapest competitor entered. Prices can be entered per-night or for the whole stay; the engine converts everything to per-night, because the GST slab is set by the per-night value of supply, per GST 2.0 effective 22 Sep 2025. ITC case marks up on TBO base; no-ITC case marks up on TBO gross.</p>
+        <p>Markup is solved so your all-in price exactly matches the cheapest competitor entered. Prices can be entered per-night or for the whole stay; the engine converts everything to per-night, because the GST slab is set by the per-night value of supply, per GST 2.0 effective 22 Sep 2025. You are liable for GST only on the markup you add; TBO&rsquo;s GST is reclaimable as ITC only when the room was bought above &#8377;7,500/night.</p>
       </footer>
+      </>)}
     </div>
   );
 }

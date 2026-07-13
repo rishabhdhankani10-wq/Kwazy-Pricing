@@ -22,10 +22,10 @@ export async function GET() {
 export async function PUT(req: Request) {
   const supabase = getSupabase();
   const body = await req.json();
-  const { rows, opex_pct, reward_pct } = body;
+  const { rows, opex_pct, reward_pct, benchmark } = body;
 
   const { error } = await supabase.from("current_session").upsert(
-    { id: "main", rows, opex_pct, reward_pct, updated_at: new Date().toISOString() },
+    { id: "main", rows, opex_pct, reward_pct, benchmark: benchmark ?? [], updated_at: new Date().toISOString() },
     { onConflict: "id" }
   );
 

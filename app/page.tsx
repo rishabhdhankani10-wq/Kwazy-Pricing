@@ -15,7 +15,8 @@ type Row = {
   goibibo: string;
   booking: string;
   checkIn: string;   // ISO date string, optional
-  nights: string;    // number of nights (default "1")
+  checkOut: string;  // ISO date string, optional — auto-derives nights when set
+  nights: string;    // number of nights (default "1"); auto-filled from dates
   mode: CostMode;    // are the prices entered per-night or for the whole stay
   reward: string;    // per-row reward override (%) — blank = use global
 };
@@ -53,6 +54,7 @@ const blankRow = (): Row => ({
   goibibo: "",
   booking: "",
   checkIn: "",
+  checkOut: "",
   nights: "1",
   mode: "night",
   reward: "",
@@ -61,6 +63,15 @@ const blankRow = (): Row => ({
 const num = (s: string) => {
   const n = parseFloat(s.replace(/[^0-9.]/g, ""));
   return isNaN(n) ? 0 : n;
+};
+
+// Nights between two ISO dates (checkout − checkin). Returns null if invalid.
+const nightsBetween = (checkIn: string, checkOut: string): number | null => {
+  if (!checkIn || !checkOut) return null;
+  const a = new Date(checkIn).getTime();
+  const b = new Date(checkOut).getTime();
+  if (isNaN(a) || isNaN(b) || b <= a) return null;
+  return Math.round((b - a) / 86_400_000);
 };
 
 const nightsOf = (r: Row) => Math.max(1, Math.round(num(r.nights) || 1));
@@ -103,6 +114,7 @@ export default function Page() {
             id: nextId++,
             // backfill fields that may not exist in older saves
             checkIn: r.checkIn ?? "",
+            checkOut: r.checkOut ?? "",
             nights: r.nights ?? "1",
             mode: (r.mode as CostMode) ?? "night",
             reward: r.reward ?? "",
@@ -214,7 +226,18 @@ export default function Page() {
 
   // ── Row operations ──────────────────────────────────────────────────────────
   const update = (id: number, field: keyof Row, value: string) =>
-    setRows((rs) => rs.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
+    setRows((rs) =>
+      rs.map((r) => {
+        if (r.id !== id) return r;
+        const next = { ...r, [field]: value };
+        // When either date changes, auto-derive nights from the range.
+        if (field === "checkIn" || field === "checkOut") {
+          const n = nightsBetween(next.checkIn, next.checkOut);
+          if (n !== null) next.nights = String(n);
+        }
+        return next;
+      })
+    );
   const setMode = (id: number, mode: CostMode) =>
     setRows((rs) => rs.map((r) => (r.id === id ? { ...r, mode } : r)));
   const addRow = () => { const r = blankRow(); setRows((rs) => [...rs, r]); setSelectedRowId(r.id); };
@@ -370,12 +393,21 @@ export default function Page() {
                     onChange={(e) => update(row.id, "checkIn", e.target.value)}
                     title="Check-in date"
                   />
-                  <div className="nights-in">
+                  <span className="date-arrow">→</span>
+                  <input
+                    className="date-in"
+                    type="date"
+                    value={row.checkOut}
+                    min={row.checkIn || undefined}
+                    onChange={(e) => update(row.id, "checkOut", e.target.value)}
+                    title="Check-out date"
+                  />
+                  <div className="nights-in" data-auto={!!nightsBetween(row.checkIn, row.checkOut)}>
                     <input
                       inputMode="numeric"
                       value={row.nights}
                       onChange={(e) => update(row.id, "nights", e.target.value)}
-                      title="Number of nights"
+                      title={nightsBetween(row.checkIn, row.checkOut) ? "Nights (auto from dates)" : "Number of nights"}
                     />
                     <span>nt</span>
                   </div>
@@ -574,7 +606,7 @@ function HotelDetail({ row, res, opexPct, rewardPct }: { row: Row; res: Result; 
     <div className="hotel-detail">
       <div className="hd-header">
         <span className="hd-name">{row.hotel || <em className="hd-unnamed">Unnamed hotel</em>}</span>
-        {row.checkIn && <span className="hd-date-chip">{fmtDate(row.checkIn)} · {n} night{n > 1 ? "s" : ""}</span>}
+        {row.checkIn && <span className="hd-date-chip">{fmtDate(row.checkIn)}{row.checkOut ? " → " + fmtDate(row.checkOut) : ""} · {n} night{n > 1 ? "s" : ""}</span>}
         {hasCost && (
           <span className="slab-tag" data-itc={res.itcApplies}>
             sell {pct(res.sellSlab.rate)} &middot; {res.itcApplies ? "input ITC ✓" : "5% stuck"}

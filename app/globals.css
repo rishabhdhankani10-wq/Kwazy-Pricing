@@ -409,6 +409,39 @@ html, body {
 .bl-label { font-size: 11.5px; font-weight: 600; color: var(--ink); font-family: 'JetBrains Mono', monospace; }
 .bl-tag { font-size: 9.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.05em; }
 
+.bench-addcity {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+.bench-addcity-in {
+  border: 1px solid var(--line-2);
+  background: var(--paper);
+  border-radius: 5px;
+  padding: 8px 12px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  color: var(--ink);
+  outline: none;
+  min-width: 240px;
+  transition: border-color .12s, background .12s;
+}
+.bench-addcity-in:focus { border-color: var(--ink); background: var(--white); }
+.bench-addcity-btn {
+  border: 1px solid var(--line-2);
+  background: var(--paper-2);
+  border-radius: 5px;
+  padding: 8px 14px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.bench-addcity-btn:hover { background: var(--ink); color: var(--paper); }
+
 .bench-city {
   margin-bottom: 20px;
   border: 1px solid var(--line-2);
@@ -570,6 +603,9 @@ html, body {
   color: var(--ink);
 }
 .nights-in span { font-size: 10px; color: var(--ink-soft); }
+.nights-in[data-auto="true"] { border-color: var(--green); background: #eef5f0; }
+.nights-in[data-auto="true"] input { color: var(--green); }
+.date-arrow { color: var(--ink-soft); font-size: 12px; }
 
 /* Per-night / total toggle */
 .mode-toggle {

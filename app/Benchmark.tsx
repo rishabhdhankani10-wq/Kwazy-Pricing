@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { compute, pct } from "./engine";
 
-// ── Fixed sampling frame ────────────────────────────────────────────────────
+// ── Default sampling frame (user can add more cities) ───────────────────────
 export const CITY_BUCKETS = [
   "Goa",
   "Jaipur/Udaipur",
@@ -128,11 +128,27 @@ export default function Benchmark({
   const updateProp = (propId: number, field: "name" | "city", value: string) =>
     setBenchmark((b) => b.map((p) => (p.id === propId ? { ...p, [field]: value } : p)));
 
+  const [newCity, setNewCity] = useState("");
+
   const addProperty = (city: string) =>
     setBenchmark((b) => [...b, blankProperty(city)]);
 
   const removeProperty = (propId: number) =>
     setBenchmark((b) => b.filter((p) => p.id !== propId));
+
+  // Cities to show = defaults ∪ any city already present in the data.
+  const cities = useMemo(() => {
+    const list = [...CITY_BUCKETS];
+    for (const p of benchmark) if (p.city && !list.includes(p.city)) list.push(p.city);
+    return list;
+  }, [benchmark]);
+
+  const addCity = () => {
+    const name = newCity.trim();
+    if (!name || cities.includes(name)) { setNewCity(""); return; }
+    setBenchmark((b) => [...b, blankProperty(name)]); // a blank property makes the city appear
+    setNewCity("");
+  };
 
   // ── Aggregations ─────────────────────────────────────────────────────────
   const analysis = useMemo(() => {
@@ -144,7 +160,7 @@ export default function Benchmark({
       perProperty.set(p.id, median(pcts));
     }
     const perCity = new Map<string, number | null>();
-    for (const city of CITY_BUCKETS) {
+    for (const city of cities) {
       const medians = benchmark
         .filter((p) => p.city === city)
         .map((p) => perProperty.get(p.id))
@@ -154,7 +170,7 @@ export default function Benchmark({
     const allMedians = [...perProperty.values()].filter((x): x is number => x != null);
     const overall = mean(allMedians);
     return { perProperty, perCity, overall };
-  }, [benchmark, opexPct, globalReward]);
+  }, [benchmark, opexPct, globalReward, cities]);
 
   const propsByCity = (city: string) => benchmark.filter((p) => p.city === city);
 
@@ -182,7 +198,7 @@ export default function Benchmark({
         ))}
       </div>
 
-      {CITY_BUCKETS.map((city) => (
+      {cities.map((city) => (
         <div className="bench-city" key={city}>
           <div className="bc-head">
             <span className="bc-name">{city}</span>
@@ -270,6 +286,17 @@ export default function Benchmark({
           ))}
         </div>
       ))}
+
+      <div className="bench-addcity">
+        <input
+          className="bench-addcity-in"
+          placeholder="Add a city / bucket…"
+          value={newCity}
+          onChange={(e) => setNewCity(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") addCity(); }}
+        />
+        <button className="bench-addcity-btn" onClick={addCity}>+ Add city</button>
+      </div>
     </div>
   );
 }

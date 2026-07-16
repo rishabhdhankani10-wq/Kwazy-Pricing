@@ -6,11 +6,11 @@ import { createPortal } from "react-dom";
 const pad = (n: number) => String(n).padStart(2, "0");
 // Local-date formatting (NOT toISOString, which shifts the day in +5:30).
 const fmtISO = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const parseISO = (s: string): Date | null => {
-  if (!s) return null;
-  const [y, m, d] = s.split("-").map(Number);
-  if (!y || !m || !d) return null;
-  return new Date(y, m - 1, d);
+const parseISO = (s: string | undefined | null): Date | null => {
+  if (!s || typeof s !== "string") return null;
+  const parts = s.split("-").map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]);
 };
 const short = (s: string) => {
   const d = parseISO(s);
@@ -34,6 +34,9 @@ export default function DateRange({
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const [view, setView] = useState<Date>(() => parseISO(checkIn) ?? new Date());
+  // In-progress selection, held internally so the two-click flow never depends
+  // on the parent re-rendering between clicks.
+  const [draft, setDraft] = useState<{ from: Date | null; to: Date | null }>({ from: null, to: null });
   const btnRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
@@ -51,45 +54,48 @@ export default function DateRange({
       if (btnRef.current?.contains(t) || popRef.current?.contains(t)) return;
       setOpen(false);
     };
-    const scroll = () => setOpen(false);
     const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     document.addEventListener("mousedown", down);
-    window.addEventListener("scroll", scroll, true);
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("mousedown", down);
-      window.removeEventListener("scroll", scroll, true);
       document.removeEventListener("keydown", key);
     };
   }, [open]);
 
-  const from = parseISO(checkIn);
-  const to = parseISO(checkOut);
-
   const openCal = () => {
+    setDraft({ from: parseISO(checkIn), to: parseISO(checkOut) });
     setView(parseISO(checkIn) ?? new Date());
     setOpen(true);
   };
 
   const pick = (day: Date) => {
-    if (!from || (from && to)) {
-      onChange(fmtISO(day), ""); // start a fresh range
-    } else if (day.getTime() < from.getTime()) {
-      onChange(fmtISO(day), ""); // clicked earlier than start -> restart
+    if (!draft.from || draft.to) {
+      // no start yet, or a full range already exists -> begin a new range
+      setDraft({ from: day, to: null });
+      onChange(fmtISO(day), "");
+    } else if (day.getTime() < draft.from.getTime()) {
+      // clicked before the start -> restart from here
+      setDraft({ from: day, to: null });
+      onChange(fmtISO(day), "");
     } else {
-      onChange(fmtISO(from), fmtISO(day)); // complete the range
+      // complete the range
+      setDraft({ from: draft.from, to: day });
+      onChange(fmtISO(draft.from), fmtISO(day));
       setOpen(false);
     }
   };
 
-  const nights = from && to ? Math.max(0, Math.round((to.getTime() - from.getTime()) / 86_400_000)) : 0;
-  const label = checkIn
-    ? checkOut
+  const ci = parseISO(checkIn);
+  const co = parseISO(checkOut);
+  const nights = ci && co ? Math.max(0, Math.round((co.getTime() - ci.getTime()) / 86_400_000)) : 0;
+  const label = ci
+    ? co
       ? `${short(checkIn)} → ${short(checkOut)} · ${nights}n`
       : `${short(checkIn)} → …`
     : "Select dates";
 
-  // Build the month grid.
+  // Month grid.
   const y = view.getFullYear();
   const m = view.getMonth();
   const firstWeekday = new Date(y, m, 1).getDay();
@@ -98,13 +104,14 @@ export default function DateRange({
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(new Date(y, m, d));
 
-  const today = new Date();
+  const todayT = (() => { const t = new Date(); return new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime(); })();
   const cellClass = (d: Date) => {
+    const t = d.getTime();
     let c = "drange-day";
-    if (from && d.getTime() === from.getTime()) c += " sel start";
-    if (to && d.getTime() === to.getTime()) c += " sel end";
-    if (from && to && d.getTime() > from.getTime() && d.getTime() < to.getTime()) c += " between";
-    if (d.getTime() === new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) c += " today";
+    if (draft.from && t === draft.from.getTime()) c += " sel start";
+    if (draft.to && t === draft.to.getTime()) c += " sel end";
+    if (draft.from && draft.to && t > draft.from.getTime() && t < draft.to.getTime()) c += " between";
+    if (t === todayT) c += " today";
     return c;
   };
 
@@ -125,6 +132,7 @@ export default function DateRange({
             ref={popRef}
             className="drange-pop"
             style={{ top: pos.top, left: pos.left }}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="drange-cal-head">
@@ -147,9 +155,9 @@ export default function DateRange({
               )}
             </div>
             <div className="drange-foot">
-              {from && !to ? "Pick the check-out date" : "Pick check-in, then check-out"}
-              {checkIn && (
-                <button type="button" className="drange-clear" onClick={() => { onChange("", ""); setOpen(false); }}>
+              <span>{draft.from && !draft.to ? "Now pick check-out" : "Pick check-in, then check-out"}</span>
+              {(checkIn || draft.from) && (
+                <button type="button" className="drange-clear" onClick={() => { setDraft({ from: null, to: null }); onChange("", ""); setOpen(false); }}>
                   Clear
                 </button>
               )}

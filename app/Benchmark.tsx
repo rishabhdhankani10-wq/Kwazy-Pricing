@@ -285,7 +285,11 @@ export default function Benchmark({
                       <span className="bslot-label">
                         {meta.label}
                         <em className="bslot-rec">
-                          {nights > 1 ? `${nights} nt · ${fmt(perNt!)}/nt` : `rec ${s.recordedAt || today()}`}
+                          {nights > 1 && perNt != null
+                            ? `${nights} nt · ${fmt(perNt)}/nt`
+                            : nights > 1
+                            ? `${nights} nt`
+                            : `rec ${s.recordedAt || today()}`}
                         </em>
                       </span>
                       <DateRange

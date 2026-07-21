@@ -174,9 +174,21 @@ function slotMarkupPct(slot: BSlot, otas: string[], opexPct: number, globalRewar
   return res.markupPct;
 }
 
+// Agent basis: your commission = (cheapest sell − TBO), taxed 18% on the
+// commission only. Retained markup as a % of TBO cost. Slab-independent.
+function slotAgentMarkupPct(slot: BSlot, otas: string[]): number | null {
+  const nights = slotNights(slot.checkIn, slot.checkOut);
+  const tbo = num(slot.tbo) / nights;
+  const comps = otas.map((o) => num(slot.comps[o]) / nights).filter((c) => c > 0);
+  if (!tbo || comps.length === 0) return null;
+  const sell = Math.min(...comps);
+  const retained = (sell - tbo) / 1.18; // 18% GST carved out of the commission
+  return retained / tbo;
+}
+
 const gridCols = (n: number) =>
-  `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.7fr`;
-const gridMinW = (n: number) => 560 + n * 105;
+  `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
+const gridMinW = (n: number) => 630 + n * 105;
 
 // ── Component ───────────────────────────────────────────────────────────────
 export default function Benchmark({
@@ -320,22 +332,27 @@ export default function Benchmark({
   // ── Aggregations ─────────────────────────────────────────────────────────
   const analysis = useMemo(() => {
     const perProperty = new Map<number, number | null>();
+    const perPropertyA = new Map<number, number | null>();
     for (const p of properties) {
       const pcts = p.slots
         .map((s) => slotMarkupPct(s, otas, opexPct, globalReward))
         .filter((x): x is number => x !== null);
+      const pctsA = p.slots
+        .map((s) => slotAgentMarkupPct(s, otas))
+        .filter((x): x is number => x !== null);
       perProperty.set(p.id, median(pcts));
+      perPropertyA.set(p.id, median(pctsA));
     }
     const perCity = new Map<string, number | null>();
+    const perCityA = new Map<string, number | null>();
     for (const city of cities) {
-      const medians = properties
-        .filter((p) => p.city === city)
-        .map((p) => perProperty.get(p.id))
-        .filter((x): x is number => x != null);
-      perCity.set(city, mean(medians));
+      const inCity = properties.filter((p) => p.city === city);
+      perCity.set(city, mean(inCity.map((p) => perProperty.get(p.id)).filter((x): x is number => x != null)));
+      perCityA.set(city, mean(inCity.map((p) => perPropertyA.get(p.id)).filter((x): x is number => x != null)));
     }
     const overall = mean([...perProperty.values()].filter((x): x is number => x != null));
-    return { perProperty, perCity, overall };
+    const overallA = mean([...perPropertyA.values()].filter((x): x is number => x != null));
+    return { perProperty, perPropertyA, perCity, perCityA, overall, overallA };
   }, [properties, otas, opexPct, globalReward, cities]);
 
   const propsByCity = (city: string) => properties.filter((p) => p.city === city);
@@ -354,6 +371,7 @@ export default function Benchmark({
         <div className="bench-overall">
           <span className="bench-overall-label">Overall median markup</span>
           <span className="bench-overall-val">{analysis.overall != null ? pct(analysis.overall) : "—"}</span>
+          <span className="bench-overall-agent">agent {analysis.overallA != null ? pct(analysis.overallA) : "—"}</span>
         </div>
       </div>
 
@@ -406,6 +424,8 @@ export default function Benchmark({
             <span className="bc-avg">
               avg markup&nbsp;
               <strong>{analysis.perCity.get(city) != null ? pct(analysis.perCity.get(city)!) : "—"}</strong>
+              &nbsp;·&nbsp;agent&nbsp;
+              <strong className="agent">{analysis.perCityA.get(city) != null ? pct(analysis.perCityA.get(city)!) : "—"}</strong>
             </span>
             <button className="bc-add" onClick={() => addProperty(city)}>+ property</button>
           </div>
@@ -426,6 +446,8 @@ export default function Benchmark({
                 <span className="bprop-median">
                   median&nbsp;
                   <strong>{analysis.perProperty.get(p.id) != null ? pct(analysis.perProperty.get(p.id)!) : "—"}</strong>
+                  &nbsp;·&nbsp;agent&nbsp;
+                  <strong className="agent">{analysis.perPropertyA.get(p.id) != null ? pct(analysis.perPropertyA.get(p.id)!) : "—"}</strong>
                 </span>
                 <button className="bprop-rm" onClick={() => removeProperty(p.id)} aria-label="Remove property">&times;</button>
               </div>
@@ -441,10 +463,12 @@ export default function Benchmark({
                   <span>Reward%</span>
                   <span>Incl.</span>
                   <span>Markup</span>
+                  <span>Agent</span>
                 </div>
                 {slots.map((meta) => {
                   const s = p.slots.find((x) => x.slot === meta.key) ?? blankSlot(meta.key, otas);
                   const mk = slotMarkupPct(s, otas, opexPct, globalReward);
+                  const mkA = slotAgentMarkupPct(s, otas);
                   const nights = slotNights(s.checkIn, s.checkOut);
                   const perNt = num(s.tbo) && nights > 1 ? num(s.tbo) / nights : null;
                   return (
@@ -482,6 +506,9 @@ export default function Benchmark({
                       </span>
                       <span className={"bslot-mk" + (mk != null && mk < 0 ? " neg" : mk != null ? " pos" : "")}>
                         {mk != null ? pct(mk) : "—"}
+                      </span>
+                      <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
+                        {mkA != null ? pct(mkA) : "—"}
                       </span>
                     </div>
                   );

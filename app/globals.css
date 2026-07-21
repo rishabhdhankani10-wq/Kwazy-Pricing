@@ -10,6 +10,7 @@
   --oxblood: #9a2d34;
   --green: #2f6b4a;
   --gold: #b08338;
+  --agent: #2f5b9a;
   --white: #fffdf8;
 }
 
@@ -397,6 +398,14 @@ html, body {
   font-weight: 700;
   color: var(--oxblood);
 }
+.bench-overall-agent {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--agent);
+}
+.bslot-mk.agent, strong.agent { color: var(--agent); }
+.bslot-mk.agent.neg { color: var(--oxblood); }
 
 /* OTA / slot config bars */
 .bench-config {

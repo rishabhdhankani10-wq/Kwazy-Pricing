@@ -398,6 +398,70 @@ html, body {
   color: var(--oxblood);
 }
 
+/* OTA / slot config bars */
+.bench-config {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.bcfg-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  font-weight: 700;
+  margin-right: 4px;
+}
+.bcfg-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--white);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 3px 5px 3px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.bcfg-chip.slot { font-family: 'JetBrains Mono', monospace; font-weight: 500; font-size: 11px; }
+.bcfg-x {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--line-2); font-size: 15px; line-height: 1; padding: 0 2px;
+  transition: color .12s;
+}
+.bcfg-x:hover { color: var(--oxblood); }
+.bcfg-in {
+  border: 1px solid var(--line-2);
+  background: var(--white);
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  color: var(--ink);
+  outline: none;
+  width: 130px;
+  transition: border-color .12s;
+}
+.bcfg-in:focus { border-color: var(--ink); }
+.bcfg-add {
+  border: 1px solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  border-radius: 12px;
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .12s;
+}
+.bcfg-add:hover { opacity: 0.85; }
+
 .bench-legend {
   display: flex;
   gap: 8px;

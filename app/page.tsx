@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { compute, fmt, pct, type Result } from "./engine";
-import Benchmark, { type BProperty, seedBenchmark } from "./Benchmark";
+import Benchmark, { type BenchmarkData, seedBenchmark, normalizeBenchmark } from "./Benchmark";
 import DateRange from "./DateRange";
 
 type CostMode = "night" | "total";
@@ -97,7 +97,7 @@ export default function Page() {
   const [selectedRowId, setSelectedRowId] = useState<number | null>(null);
   const [portfolioTab, setPortfolioTab] = useState<PortfolioTab>("hotel");
   const [view, setView] = useState<View>("desk");
-  const [benchmark, setBenchmark] = useState<BProperty[]>(seedBenchmark);
+  const [benchmark, setBenchmark] = useState<BenchmarkData>(seedBenchmark);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hotelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -124,8 +124,8 @@ export default function Page() {
           if (data.opex_pct != null) setOpexPct(Number(data.opex_pct));
           if (data.reward_pct != null) setRewardPct(Number(data.reward_pct));
         }
-        if (data && Array.isArray(data.benchmark) && data.benchmark.length > 0) {
-          setBenchmark(data.benchmark);
+        if (data && data.benchmark) {
+          setBenchmark(normalizeBenchmark(data.benchmark));
         }
         setSessionLoaded(true);
       })
@@ -144,7 +144,7 @@ export default function Page() {
 
   // ── Auto-save board state (debounced 1.5s) ──────────────────────────────────
   const saveSession = useCallback(
-    (currentRows: Row[], currentOpex: number, currentReward: number, currentBenchmark: BProperty[]) => {
+    (currentRows: Row[], currentOpex: number, currentReward: number, currentBenchmark: BenchmarkData) => {
       setSaveStatus("saving");
       fetch("/api/session", {
         method: "PUT",

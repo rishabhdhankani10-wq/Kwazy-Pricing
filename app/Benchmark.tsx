@@ -317,25 +317,41 @@ export default function Benchmark({
   };
 
   const analysis = useMemo(() => {
-    const perProperty = new Map<number, number | null>();
-    const perPropertyA = new Map<number, number | null>();
+    const perProperty = new Map<number, number | null>();      // median, principal
+    const perPropertyA = new Map<number, number | null>();     // median, agent
+    const perPropertyAvg = new Map<number, number | null>();   // mean, principal
+    const perPropertyAvgA = new Map<number, number | null>();  // mean, agent
     for (const p of properties) {
       const vis = visibleOtas(p);
       const pcts = p.slots.map((s) => slotMarkupPct(s, vis, opexPct, globalReward)).filter((x): x is number => x !== null);
       const pctsA = p.slots.map((s) => slotAgentMarkupPct(s, vis)).filter((x): x is number => x !== null);
       perProperty.set(p.id, median(pcts));
       perPropertyA.set(p.id, median(pctsA));
+      perPropertyAvg.set(p.id, mean(pcts));
+      perPropertyAvgA.set(p.id, mean(pctsA));
     }
+    const pick = (m: Map<number, number | null>, ps: BProperty[]) =>
+      mean(ps.map((p) => m.get(p.id)).filter((x): x is number => x != null));
+
     const perCity = new Map<string, number | null>();
     const perCityA = new Map<string, number | null>();
+    const perCityAvg = new Map<string, number | null>();
+    const perCityAvgA = new Map<string, number | null>();
     for (const city of cities) {
       const inCity = properties.filter((p) => p.city === city);
-      perCity.set(city, mean(inCity.map((p) => perProperty.get(p.id)).filter((x): x is number => x != null)));
-      perCityA.set(city, mean(inCity.map((p) => perPropertyA.get(p.id)).filter((x): x is number => x != null)));
+      perCity.set(city, pick(perProperty, inCity));
+      perCityA.set(city, pick(perPropertyA, inCity));
+      perCityAvg.set(city, pick(perPropertyAvg, inCity));
+      perCityAvgA.set(city, pick(perPropertyAvgA, inCity));
     }
-    const overall = mean([...perProperty.values()].filter((x): x is number => x != null));
-    const overallA = mean([...perPropertyA.values()].filter((x): x is number => x != null));
-    return { perProperty, perPropertyA, perCity, perCityA, overall, overallA };
+    const all = (m: Map<number, number | null>) =>
+      mean([...m.values()].filter((x): x is number => x != null));
+    return {
+      perProperty, perPropertyA, perPropertyAvg, perPropertyAvgA,
+      perCity, perCityA, perCityAvg, perCityAvgA,
+      overall: all(perProperty), overallA: all(perPropertyA),
+      overallAvg: all(perPropertyAvg), overallAvgA: all(perPropertyAvgA),
+    };
   }, [properties, opexPct, globalReward, cities]);
 
   const propsByCity = (city: string) => properties.filter((p) => p.city === city);
@@ -350,9 +366,17 @@ export default function Benchmark({
           </p>
         </div>
         <div className="bench-overall">
-          <span className="bench-overall-label">Overall median markup</span>
-          <span className="bench-overall-val">{analysis.overall != null ? pct(analysis.overall) : "—"}</span>
-          <span className="bench-overall-agent">agent {analysis.overallA != null ? pct(analysis.overallA) : "—"}</span>
+          <span className="bench-overall-label">Overall markup · med / avg</span>
+          <span className="bench-overall-val">
+            {analysis.overall != null ? pct(analysis.overall) : "—"}
+            <em className="bench-overall-slash"> / </em>
+            {analysis.overallAvg != null ? pct(analysis.overallAvg) : "—"}
+          </span>
+          <span className="bench-overall-agent">
+            agent {analysis.overallA != null ? pct(analysis.overallA) : "—"}
+            {" / "}
+            {analysis.overallAvgA != null ? pct(analysis.overallAvgA) : "—"}
+          </span>
         </div>
       </div>
 
@@ -382,10 +406,12 @@ export default function Benchmark({
           <div className="bc-head">
             <span className="bc-name">{city}</span>
             <span className="bc-avg">
-              avg markup&nbsp;
-              <strong>{analysis.perCity.get(city) != null ? pct(analysis.perCity.get(city)!) : "—"}</strong>
+              med&nbsp;<strong>{analysis.perCity.get(city) != null ? pct(analysis.perCity.get(city)!) : "—"}</strong>
+              &nbsp;·&nbsp;avg&nbsp;<strong>{analysis.perCityAvg.get(city) != null ? pct(analysis.perCityAvg.get(city)!) : "—"}</strong>
               &nbsp;·&nbsp;agent&nbsp;
               <strong className="agent">{analysis.perCityA.get(city) != null ? pct(analysis.perCityA.get(city)!) : "—"}</strong>
+              <span className="agent">&nbsp;/&nbsp;</span>
+              <strong className="agent">{analysis.perCityAvgA.get(city) != null ? pct(analysis.perCityAvgA.get(city)!) : "—"}</strong>
             </span>
             <button className="bc-add" onClick={() => addProperty(city)}>+ property</button>
           </div>
@@ -408,10 +434,12 @@ export default function Benchmark({
                     onChange={(e) => updateProp(p.id, "name", e.target.value)}
                   />
                   <span className="bprop-median">
-                    median&nbsp;
-                    <strong>{analysis.perProperty.get(p.id) != null ? pct(analysis.perProperty.get(p.id)!) : "—"}</strong>
+                    med&nbsp;<strong>{analysis.perProperty.get(p.id) != null ? pct(analysis.perProperty.get(p.id)!) : "—"}</strong>
+                    &nbsp;·&nbsp;avg&nbsp;<strong>{analysis.perPropertyAvg.get(p.id) != null ? pct(analysis.perPropertyAvg.get(p.id)!) : "—"}</strong>
                     &nbsp;·&nbsp;agent&nbsp;
                     <strong className="agent">{analysis.perPropertyA.get(p.id) != null ? pct(analysis.perPropertyA.get(p.id)!) : "—"}</strong>
+                    <span className="agent">&nbsp;/&nbsp;</span>
+                    <strong className="agent">{analysis.perPropertyAvgA.get(p.id) != null ? pct(analysis.perPropertyAvgA.get(p.id)!) : "—"}</strong>
                   </span>
                   <button className="bprop-rm" onClick={() => removeProperty(p.id)} aria-label="Remove property">&times;</button>
                 </div>

@@ -522,6 +522,13 @@ html, body {
 }
 .bench-addcity-btn:hover { background: var(--ink); color: var(--paper); }
 
+.ota-bar {
+  margin: 0 0 8px;
+  padding: 5px 10px;
+  background: var(--paper);
+}
+.ota-bar .bcfg-label { color: var(--gold); }
+
 .bench-city {
   margin-bottom: 20px;
   border: 1px solid var(--line-2);

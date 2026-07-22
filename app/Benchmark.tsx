@@ -26,7 +26,7 @@ export const DEFAULT_SLOTS: SlotDef[] = [
 ];
 
 export type BSlot = {
-  slot: string;                     // matches a SlotDef key
+  slot: string;
   checkIn: string;
   checkOut: string;
   recordedAt: string;
@@ -42,12 +42,12 @@ export type BProperty = {
   id: number;
   city: string;
   name: string;
+  otas: string[];                   // per-property OTA set
   slots: BSlot[];
 };
 
 export type BenchmarkData = {
-  otas: string[];
-  slots: SlotDef[];
+  slots: SlotDef[];                 // time slots stay global
   properties: BProperty[];
 };
 
@@ -81,28 +81,27 @@ const blankSlot = (slotKey: string, otas: string[]): BSlot => ({
   roomType: "",
 });
 
-const blankProperty = (city: string, otas: string[], slots: SlotDef[], name = ""): BProperty => ({
+const blankProperty = (city: string, slots: SlotDef[], otas: string[] = DEFAULT_OTAS, name = ""): BProperty => ({
   id: bId++,
   city,
   name,
+  otas: [...otas],
   slots: slots.map((s) => blankSlot(s.key, otas)),
 });
 
 export const seedBenchmark = (): BenchmarkData => ({
-  otas: [...DEFAULT_OTAS],
   slots: [...DEFAULT_SLOTS],
-  properties: CITY_BUCKETS.map((c) => blankProperty(c, DEFAULT_OTAS, DEFAULT_SLOTS)),
+  properties: CITY_BUCKETS.map((c) => blankProperty(c, DEFAULT_SLOTS)),
 });
 
-// Accepts old (BProperty[] with mmt/goibibo/booking) or new shape, always
-// returns a valid BenchmarkData with comps filled for every OTA.
+// Migrate old (BProperty[] with mmt/goibibo/booking, or object w/ global otas)
+// into the new shape where each property carries its own OTA set.
 export function normalizeBenchmark(raw: unknown): BenchmarkData {
   if (!raw) return seedBenchmark();
 
-  // Old shape: an array of properties with flat mmt/goibibo/booking fields.
   if (Array.isArray(raw)) {
-    const otas = [...DEFAULT_OTAS];
     const slots = [...DEFAULT_SLOTS];
+    const otas = [...DEFAULT_OTAS];
     const properties = (raw as unknown[]).map((pp) => {
       const p = pp as Record<string, unknown>;
       const oldSlots = (p.slots as Record<string, unknown>[]) ?? [];
@@ -110,6 +109,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
         id: bId++,
         city: String(p.city ?? ""),
         name: String(p.name ?? ""),
+        otas: [...otas],
         slots: slots.map((sd) => {
           const os = oldSlots.find((x) => x.slot === sd.key) ?? {};
           return {
@@ -122,35 +122,34 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
             breakfast: Boolean(os.breakfast),
             freeCancellation: Boolean(os.freeCancellation),
             roomType: String(os.roomType ?? ""),
-            comps: {
-              MMT: String(os.mmt ?? ""),
-              Goibibo: String(os.goibibo ?? ""),
-              Booking: String(os.booking ?? ""),
-            },
+            comps: { MMT: String(os.mmt ?? ""), Goibibo: String(os.goibibo ?? ""), Booking: String(os.booking ?? "") },
           } as BSlot;
         }),
       } as BProperty;
     });
-    return { otas, slots, properties };
+    return { slots, properties };
   }
 
-  // New shape: ensure every field exists and comps covers all OTAs.
-  const d = raw as Partial<BenchmarkData>;
-  const otas = d.otas && d.otas.length ? d.otas : [...DEFAULT_OTAS];
+  const d = raw as Partial<BenchmarkData> & { otas?: string[] };
   const slots = d.slots && d.slots.length ? d.slots : [...DEFAULT_SLOTS];
-  const properties = (d.properties ?? []).map((p) => ({
-    id: bId++,
-    city: p.city,
-    name: p.name,
-    slots: slots.map((sd) => {
-      const existing = p.slots?.find((s) => s.slot === sd.key);
-      const base = existing ?? blankSlot(sd.key, otas);
-      const comps: Record<string, string> = {};
-      for (const o of otas) comps[o] = base.comps?.[o] ?? "";
-      return { ...blankSlot(sd.key, otas), ...base, comps };
-    }),
-  }));
-  return { otas, slots, properties };
+  const globalOtas = d.otas && d.otas.length ? d.otas : [...DEFAULT_OTAS]; // old global set, if any
+  const properties = (d.properties ?? []).map((p) => {
+    const otas = (p as BProperty).otas?.length ? (p as BProperty).otas : globalOtas;
+    return {
+      id: bId++,
+      city: p.city,
+      name: p.name,
+      otas: [...otas],
+      slots: slots.map((sd) => {
+        const existing = p.slots?.find((s) => s.slot === sd.key);
+        const base = existing ?? blankSlot(sd.key, otas);
+        const comps: Record<string, string> = {};
+        for (const o of otas) comps[o] = base.comps?.[o] ?? "";
+        return { ...blankSlot(sd.key, otas), ...base, comps };
+      }),
+    } as BProperty;
+  });
+  return { slots, properties };
 }
 
 const median = (xs: number[]): number | null => {
@@ -165,25 +164,22 @@ const mean = (xs: number[]): number | null =>
 function slotMarkupPct(slot: BSlot, otas: string[], opexPct: number, globalReward: number): number | null {
   const nights = slotNights(slot.checkIn, slot.checkOut);
   const tbo = num(slot.tbo) / nights;
-  const comps = otas
-    .map((o) => num(slot.comps[o]) / nights)
-    .filter((c) => c > 0);
+  const comps = otas.map((o) => num(slot.comps[o]) / nights).filter((c) => c > 0);
   if (!tbo || comps.length === 0) return null;
   const rewardPct = (num(slot.reward) || globalReward) / 100;
   const res = compute({ tboGross: tbo, competitors: comps, opexPct: opexPct / 100, rewardPct });
   return res.markupPct;
 }
 
-// Agent basis: your commission = (cheapest sell − TBO), taxed 18% on the
-// commission only. Retained markup as a % of TBO cost. Slab-independent.
+// Agent basis: commission = (cheapest sell − TBO), taxed 18% on the commission
+// only. Retained as a % of TBO cost. Slab-independent.
 function slotAgentMarkupPct(slot: BSlot, otas: string[]): number | null {
   const nights = slotNights(slot.checkIn, slot.checkOut);
   const tbo = num(slot.tbo) / nights;
   const comps = otas.map((o) => num(slot.comps[o]) / nights).filter((c) => c > 0);
   if (!tbo || comps.length === 0) return null;
   const sell = Math.min(...comps);
-  const retained = (sell - tbo) / 1.18; // 18% GST carved out of the commission
-  return retained / tbo;
+  return ((sell - tbo) / 1.18) / tbo;
 }
 
 const gridCols = (n: number) =>
@@ -202,98 +198,87 @@ export default function Benchmark({
   opexPct: number;
   globalReward: number;
 }) {
-  const { otas, slots, properties } = benchmark;
+  const { slots, properties } = benchmark;
   const [newCity, setNewCity] = useState("");
-  const [newOta, setNewOta] = useState("");
   const [newSlot, setNewSlot] = useState("");
 
-  // ── Mutators ───────────────────────────────────────────────────────────────
+  const mapProp = (b: BenchmarkData, propId: number, fn: (p: BProperty) => BProperty) => ({
+    ...b,
+    properties: b.properties.map((p) => (p.id === propId ? fn(p) : p)),
+  });
+
   const updateSlot = (propId: number, slotKey: string, field: keyof BSlot, value: string | boolean) =>
-    setBenchmark((b) => ({
-      ...b,
-      properties: b.properties.map((p) =>
-        p.id !== propId
-          ? p
-          : {
-              ...p,
-              slots: p.slots.map((s) => {
-                if (s.slot !== slotKey) return s;
-                const next = { ...s, [field]: value };
-                if (field === "tbo" && value && !s.recordedAt) next.recordedAt = today();
-                return next;
-              }),
-            }
-      ),
-    }));
+    setBenchmark((b) =>
+      mapProp(b, propId, (p) => ({
+        ...p,
+        slots: p.slots.map((s) => {
+          if (s.slot !== slotKey) return s;
+          const next = { ...s, [field]: value };
+          if (field === "tbo" && value && !s.recordedAt) next.recordedAt = today();
+          return next;
+        }),
+      }))
+    );
 
   const updateComp = (propId: number, slotKey: string, ota: string, value: string) =>
-    setBenchmark((b) => ({
-      ...b,
-      properties: b.properties.map((p) =>
-        p.id !== propId
-          ? p
-          : {
-              ...p,
-              slots: p.slots.map((s) =>
-                s.slot === slotKey ? { ...s, comps: { ...s.comps, [ota]: value } } : s
-              ),
-            }
-      ),
-    }));
+    setBenchmark((b) =>
+      mapProp(b, propId, (p) => ({
+        ...p,
+        slots: p.slots.map((s) => (s.slot === slotKey ? { ...s, comps: { ...s.comps, [ota]: value } } : s)),
+      }))
+    );
 
   const updateSlotDates = (propId: number, slotKey: string, from: string, to: string) =>
-    setBenchmark((b) => ({
-      ...b,
-      properties: b.properties.map((p) =>
-        p.id !== propId
-          ? p
-          : { ...p, slots: p.slots.map((s) => (s.slot === slotKey ? { ...s, checkIn: from, checkOut: to } : s)) }
-      ),
-    }));
+    setBenchmark((b) =>
+      mapProp(b, propId, (p) => ({
+        ...p,
+        slots: p.slots.map((s) => (s.slot === slotKey ? { ...s, checkIn: from, checkOut: to } : s)),
+      }))
+    );
 
   const updateProp = (propId: number, field: "name" | "city", value: string) =>
-    setBenchmark((b) => ({
-      ...b,
-      properties: b.properties.map((p) => (p.id === propId ? { ...p, [field]: value } : p)),
-    }));
+    setBenchmark((b) => mapProp(b, propId, (p) => ({ ...p, [field]: value })));
 
   const addProperty = (city: string) =>
-    setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(city, b.otas, b.slots)] }));
+    setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(city, b.slots)] }));
 
   const removeProperty = (propId: number) =>
     setBenchmark((b) => ({ ...b, properties: b.properties.filter((p) => p.id !== propId) }));
 
-  const addOta = () => {
-    const name = newOta.trim();
-    if (!name || otas.includes(name)) { setNewOta(""); return; }
-    setBenchmark((b) => ({
-      ...b,
-      otas: [...b.otas, name],
-      properties: b.properties.map((p) => ({
-        ...p,
-        slots: p.slots.map((s) => ({ ...s, comps: { ...s.comps, [name]: "" } })),
-      })),
-    }));
-    setNewOta("");
+  // Per-property OTA add/remove
+  const addOta = (propId: number, name: string) => {
+    const nm = name.trim();
+    if (!nm) return;
+    setBenchmark((b) =>
+      mapProp(b, propId, (p) =>
+        p.otas.includes(nm)
+          ? p
+          : {
+              ...p,
+              otas: [...p.otas, nm],
+              slots: p.slots.map((s) => ({ ...s, comps: { ...s.comps, [nm]: "" } })),
+            }
+      )
+    );
   };
 
-  const removeOta = (name: string) =>
-    setBenchmark((b) => {
-      if (b.otas.length <= 1) return b;
-      return {
-        ...b,
-        otas: b.otas.filter((o) => o !== name),
-        properties: b.properties.map((p) => ({
+  const removeOta = (propId: number, name: string) =>
+    setBenchmark((b) =>
+      mapProp(b, propId, (p) => {
+        if (p.otas.length <= 1) return p;
+        return {
           ...p,
+          otas: p.otas.filter((o) => o !== name),
           slots: p.slots.map((s) => {
             const comps = { ...s.comps };
             delete comps[name];
             return { ...s, comps };
           }),
-        })),
-      };
-    });
+        };
+      })
+    );
 
+  // Global time slots
   const addSlot = () => {
     const label = newSlot.trim();
     if (!label) return;
@@ -301,7 +286,7 @@ export default function Benchmark({
     setBenchmark((b) => ({
       ...b,
       slots: [...b.slots, def],
-      properties: b.properties.map((p) => ({ ...p, slots: [...p.slots, blankSlot(def.key, b.otas)] })),
+      properties: b.properties.map((p) => ({ ...p, slots: [...p.slots, blankSlot(def.key, p.otas)] })),
     }));
     setNewSlot("");
   };
@@ -325,21 +310,16 @@ export default function Benchmark({
   const addCity = () => {
     const name = newCity.trim();
     if (!name || cities.includes(name)) { setNewCity(""); return; }
-    setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(name, b.otas, b.slots)] }));
+    setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(name, b.slots)] }));
     setNewCity("");
   };
 
-  // ── Aggregations ─────────────────────────────────────────────────────────
   const analysis = useMemo(() => {
     const perProperty = new Map<number, number | null>();
     const perPropertyA = new Map<number, number | null>();
     for (const p of properties) {
-      const pcts = p.slots
-        .map((s) => slotMarkupPct(s, otas, opexPct, globalReward))
-        .filter((x): x is number => x !== null);
-      const pctsA = p.slots
-        .map((s) => slotAgentMarkupPct(s, otas))
-        .filter((x): x is number => x !== null);
+      const pcts = p.slots.map((s) => slotMarkupPct(s, p.otas, opexPct, globalReward)).filter((x): x is number => x !== null);
+      const pctsA = p.slots.map((s) => slotAgentMarkupPct(s, p.otas)).filter((x): x is number => x !== null);
       perProperty.set(p.id, median(pcts));
       perPropertyA.set(p.id, median(pctsA));
     }
@@ -353,11 +333,9 @@ export default function Benchmark({
     const overall = mean([...perProperty.values()].filter((x): x is number => x != null));
     const overallA = mean([...perPropertyA.values()].filter((x): x is number => x != null));
     return { perProperty, perPropertyA, perCity, perCityA, overall, overallA };
-  }, [properties, otas, opexPct, globalReward, cities]);
+  }, [properties, opexPct, globalReward, cities]);
 
   const propsByCity = (city: string) => properties.filter((p) => p.city === city);
-  const cols = gridCols(otas.length);
-  const minW = gridMinW(otas.length);
 
   return (
     <div className="bench">
@@ -375,28 +353,7 @@ export default function Benchmark({
         </div>
       </div>
 
-      {/* OTA manager */}
-      <div className="bench-config">
-        <span className="bcfg-label">Compare OTAs</span>
-        {otas.map((o) => (
-          <span className="bcfg-chip" key={o}>
-            {o}
-            {otas.length > 1 && (
-              <button className="bcfg-x" onClick={() => removeOta(o)} aria-label={`Remove ${o}`}>&times;</button>
-            )}
-          </span>
-        ))}
-        <input
-          className="bcfg-in"
-          placeholder="Add OTA…"
-          value={newOta}
-          onChange={(e) => setNewOta(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addOta()}
-        />
-        <button className="bcfg-add" onClick={addOta}>+ OTA</button>
-      </div>
-
-      {/* Slot manager */}
+      {/* Slot manager (global) */}
       <div className="bench-config">
         <span className="bcfg-label">Time slots</span>
         {slots.map((s) => (
@@ -434,88 +391,95 @@ export default function Benchmark({
             <p className="bc-empty">No properties yet — add one to start sampling.</p>
           )}
 
-          {propsByCity(city).map((p) => (
-            <div className="bprop" key={p.id}>
-              <div className="bprop-head">
-                <input
-                  className="bprop-name"
-                  placeholder="Property name"
-                  value={p.name}
-                  onChange={(e) => updateProp(p.id, "name", e.target.value)}
-                />
-                <span className="bprop-median">
-                  median&nbsp;
-                  <strong>{analysis.perProperty.get(p.id) != null ? pct(analysis.perProperty.get(p.id)!) : "—"}</strong>
-                  &nbsp;·&nbsp;agent&nbsp;
-                  <strong className="agent">{analysis.perPropertyA.get(p.id) != null ? pct(analysis.perPropertyA.get(p.id)!) : "—"}</strong>
-                </span>
-                <button className="bprop-rm" onClick={() => removeProperty(p.id)} aria-label="Remove property">&times;</button>
-              </div>
-
-              <div className="bslot-table">
-                <div className="bslot-row bslot-header" style={{ gridTemplateColumns: cols, minWidth: minW }}>
-                  <span>Season slot</span>
-                  <span>Dates</span>
-                  <span>TBO</span>
-                  {otas.map((o) => (
-                    <span key={o}>{o}</span>
-                  ))}
-                  <span>Reward%</span>
-                  <span>Incl.</span>
-                  <span>Markup</span>
-                  <span>Agent</span>
+          {propsByCity(city).map((p) => {
+            const cols = gridCols(p.otas.length);
+            const minW = gridMinW(p.otas.length);
+            return (
+              <div className="bprop" key={p.id}>
+                <div className="bprop-head">
+                  <input
+                    className="bprop-name"
+                    placeholder="Property name"
+                    value={p.name}
+                    onChange={(e) => updateProp(p.id, "name", e.target.value)}
+                  />
+                  <span className="bprop-median">
+                    median&nbsp;
+                    <strong>{analysis.perProperty.get(p.id) != null ? pct(analysis.perProperty.get(p.id)!) : "—"}</strong>
+                    &nbsp;·&nbsp;agent&nbsp;
+                    <strong className="agent">{analysis.perPropertyA.get(p.id) != null ? pct(analysis.perPropertyA.get(p.id)!) : "—"}</strong>
+                  </span>
+                  <button className="bprop-rm" onClick={() => removeProperty(p.id)} aria-label="Remove property">&times;</button>
                 </div>
-                {slots.map((meta) => {
-                  const s = p.slots.find((x) => x.slot === meta.key) ?? blankSlot(meta.key, otas);
-                  const mk = slotMarkupPct(s, otas, opexPct, globalReward);
-                  const mkA = slotAgentMarkupPct(s, otas);
-                  const nights = slotNights(s.checkIn, s.checkOut);
-                  const perNt = num(s.tbo) && nights > 1 ? num(s.tbo) / nights : null;
-                  return (
-                    <div className="bslot-row" key={meta.key} style={{ gridTemplateColumns: cols, minWidth: minW }}>
-                      <span className="bslot-label">
-                        {meta.label}
-                        <em className="bslot-rec">
-                          {nights > 1 && perNt != null
-                            ? `${nights} nt · ${fmt(perNt)}/nt`
-                            : nights > 1
-                            ? `${nights} nt`
-                            : `rec ${s.recordedAt || today()}`}
-                        </em>
-                      </span>
-                      <DateRange
-                        compact
-                        checkIn={s.checkIn}
-                        checkOut={s.checkOut ?? ""}
-                        onChange={(f, t) => updateSlotDates(p.id, meta.key, f, t)}
-                      />
-                      <BInput value={s.tbo} onChange={(v) => updateSlot(p.id, meta.key, "tbo", v)} />
-                      {otas.map((o) => (
-                        <BInput key={o} value={s.comps[o] ?? ""} onChange={(v) => updateComp(p.id, meta.key, o, v)} />
-                      ))}
-                      <BInput value={s.reward} onChange={(v) => updateSlot(p.id, meta.key, "reward", v)} placeholder={String(globalReward)} />
-                      <span className="bslot-incl">
-                        <label title="Breakfast included">
-                          <input type="checkbox" checked={s.breakfast} onChange={(e) => updateSlot(p.id, meta.key, "breakfast", e.target.checked)} />
-                          B
-                        </label>
-                        <label title="Free cancellation">
-                          <input type="checkbox" checked={s.freeCancellation} onChange={(e) => updateSlot(p.id, meta.key, "freeCancellation", e.target.checked)} />
-                          FC
-                        </label>
-                      </span>
-                      <span className={"bslot-mk" + (mk != null && mk < 0 ? " neg" : mk != null ? " pos" : "")}>
-                        {mk != null ? pct(mk) : "—"}
-                      </span>
-                      <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
-                        {mkA != null ? pct(mkA) : "—"}
-                      </span>
-                    </div>
-                  );
-                })}
+
+                {/* Per-property OTA manager */}
+                <OtaBar otas={p.otas} onAdd={(nm) => addOta(p.id, nm)} onRemove={(nm) => removeOta(p.id, nm)} />
+
+                <div className="bslot-table">
+                  <div className="bslot-row bslot-header" style={{ gridTemplateColumns: cols, minWidth: minW }}>
+                    <span>Season slot</span>
+                    <span>Dates</span>
+                    <span>TBO</span>
+                    {p.otas.map((o) => (
+                      <span key={o}>{o}</span>
+                    ))}
+                    <span>Reward%</span>
+                    <span>Incl.</span>
+                    <span>Markup</span>
+                    <span>Agent</span>
+                  </div>
+                  {slots.map((meta) => {
+                    const s = p.slots.find((x) => x.slot === meta.key) ?? blankSlot(meta.key, p.otas);
+                    const mk = slotMarkupPct(s, p.otas, opexPct, globalReward);
+                    const mkA = slotAgentMarkupPct(s, p.otas);
+                    const nights = slotNights(s.checkIn, s.checkOut);
+                    const perNt = num(s.tbo) && nights > 1 ? num(s.tbo) / nights : null;
+                    return (
+                      <div className="bslot-row" key={meta.key} style={{ gridTemplateColumns: cols, minWidth: minW }}>
+                        <span className="bslot-label">
+                          {meta.label}
+                          <em className="bslot-rec">
+                            {nights > 1 && perNt != null
+                              ? `${nights} nt · ${fmt(perNt)}/nt`
+                              : nights > 1
+                              ? `${nights} nt`
+                              : `rec ${s.recordedAt || today()}`}
+                          </em>
+                        </span>
+                        <DateRange
+                          compact
+                          checkIn={s.checkIn}
+                          checkOut={s.checkOut ?? ""}
+                          onChange={(f, t) => updateSlotDates(p.id, meta.key, f, t)}
+                        />
+                        <BInput value={s.tbo} onChange={(v) => updateSlot(p.id, meta.key, "tbo", v)} />
+                        {p.otas.map((o) => (
+                          <BInput key={o} value={s.comps[o] ?? ""} onChange={(v) => updateComp(p.id, meta.key, o, v)} />
+                        ))}
+                        <BInput value={s.reward} onChange={(v) => updateSlot(p.id, meta.key, "reward", v)} placeholder={String(globalReward)} />
+                        <span className="bslot-incl">
+                          <label title="Breakfast included">
+                            <input type="checkbox" checked={s.breakfast} onChange={(e) => updateSlot(p.id, meta.key, "breakfast", e.target.checked)} />
+                            B
+                          </label>
+                          <label title="Free cancellation">
+                            <input type="checkbox" checked={s.freeCancellation} onChange={(e) => updateSlot(p.id, meta.key, "freeCancellation", e.target.checked)} />
+                            FC
+                          </label>
+                        </span>
+                        <span className={"bslot-mk" + (mk != null && mk < 0 ? " neg" : mk != null ? " pos" : "")}>
+                          {mk != null ? pct(mk) : "—"}
+                        </span>
+                        <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
+                          {mkA != null ? pct(mkA) : "—"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ))}
 
@@ -529,6 +493,32 @@ export default function Benchmark({
         />
         <button className="bench-addcity-btn" onClick={addCity}>+ Add city</button>
       </div>
+    </div>
+  );
+}
+
+function OtaBar({ otas, onAdd, onRemove }: { otas: string[]; onAdd: (n: string) => void; onRemove: (n: string) => void }) {
+  const [val, setVal] = useState("");
+  const add = () => { onAdd(val); setVal(""); };
+  return (
+    <div className="bench-config ota-bar">
+      <span className="bcfg-label">OTAs</span>
+      {otas.map((o) => (
+        <span className="bcfg-chip" key={o}>
+          {o}
+          {otas.length > 1 && (
+            <button className="bcfg-x" onClick={() => onRemove(o)} aria-label={`Remove ${o}`}>&times;</button>
+          )}
+        </span>
+      ))}
+      <input
+        className="bcfg-in"
+        placeholder="Add OTA…"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && add()}
+      />
+      <button className="bcfg-add" onClick={add}>+ OTA</button>
     </div>
   );
 }

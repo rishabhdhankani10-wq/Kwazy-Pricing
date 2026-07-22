@@ -317,40 +317,57 @@ export default function Benchmark({
   };
 
   const analysis = useMemo(() => {
-    const perProperty = new Map<number, number | null>();      // median, principal
-    const perPropertyA = new Map<number, number | null>();     // median, agent
-    const perPropertyAvg = new Map<number, number | null>();   // mean, principal
-    const perPropertyAvgA = new Map<number, number | null>();  // mean, agent
-    for (const p of properties) {
-      const vis = visibleOtas(p);
-      const pcts = p.slots.map((s) => slotMarkupPct(s, vis, opexPct, globalReward)).filter((x): x is number => x !== null);
-      const pctsA = p.slots.map((s) => slotAgentMarkupPct(s, vis)).filter((x): x is number => x !== null);
-      perProperty.set(p.id, median(pcts));
-      perPropertyA.set(p.id, median(pctsA));
-      perPropertyAvg.set(p.id, mean(pcts));
-      perPropertyAvgA.set(p.id, mean(pctsA));
+    // Raw slot-level observations per property. Every median/avg at every level
+    // is computed from these directly, by pooling — so each label is the real
+    // statistic (never a mean-of-medians).
+    const vals = new Map<number, { p: number[]; a: number[] }>();
+    for (const prop of properties) {
+      const vis = visibleOtas(prop);
+      const p = prop.slots
+        .map((s) => slotMarkupPct(s, vis, opexPct, globalReward))
+        .filter((x): x is number => x !== null);
+      const a = prop.slots
+        .map((s) => slotAgentMarkupPct(s, vis))
+        .filter((x): x is number => x !== null);
+      vals.set(prop.id, { p, a });
     }
-    const pick = (m: Map<number, number | null>, ps: BProperty[]) =>
-      mean(ps.map((p) => m.get(p.id)).filter((x): x is number => x != null));
 
+    const perProperty = new Map<number, number | null>();
+    const perPropertyA = new Map<number, number | null>();
+    const perPropertyAvg = new Map<number, number | null>();
+    const perPropertyAvgA = new Map<number, number | null>();
+    for (const prop of properties) {
+      const v = vals.get(prop.id)!;
+      perProperty.set(prop.id, median(v.p));
+      perPropertyA.set(prop.id, median(v.a));
+      perPropertyAvg.set(prop.id, mean(v.p));
+      perPropertyAvgA.set(prop.id, mean(v.a));
+    }
+
+    // City = pool every observation from that city's properties.
     const perCity = new Map<string, number | null>();
     const perCityA = new Map<string, number | null>();
     const perCityAvg = new Map<string, number | null>();
     const perCityAvgA = new Map<string, number | null>();
     for (const city of cities) {
       const inCity = properties.filter((p) => p.city === city);
-      perCity.set(city, pick(perProperty, inCity));
-      perCityA.set(city, pick(perPropertyA, inCity));
-      perCityAvg.set(city, pick(perPropertyAvg, inCity));
-      perCityAvgA.set(city, pick(perPropertyAvgA, inCity));
+      const poolP = inCity.flatMap((p) => vals.get(p.id)?.p ?? []);
+      const poolA = inCity.flatMap((p) => vals.get(p.id)?.a ?? []);
+      perCity.set(city, median(poolP));
+      perCityA.set(city, median(poolA));
+      perCityAvg.set(city, mean(poolP));
+      perCityAvgA.set(city, mean(poolA));
     }
-    const all = (m: Map<number, number | null>) =>
-      mean([...m.values()].filter((x): x is number => x != null));
+
+    // Overall = pool every observation everywhere.
+    const allP = properties.flatMap((p) => vals.get(p.id)?.p ?? []);
+    const allA = properties.flatMap((p) => vals.get(p.id)?.a ?? []);
+
     return {
       perProperty, perPropertyA, perPropertyAvg, perPropertyAvgA,
       perCity, perCityA, perCityAvg, perCityAvgA,
-      overall: all(perProperty), overallA: all(perPropertyA),
-      overallAvg: all(perPropertyAvg), overallAvgA: all(perPropertyAvgA),
+      overall: median(allP), overallA: median(allA),
+      overallAvg: mean(allP), overallAvgA: mean(allA),
     };
   }, [properties, opexPct, globalReward, cities]);
 

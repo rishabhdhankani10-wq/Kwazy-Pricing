@@ -43,6 +43,7 @@ export type BProperty = {
   city: string;
   name: string;
   otas: string[];                   // per-property OTA set
+  hidden: string[];                 // OTAs excluded from the result but data kept
   slots: BSlot[];
 };
 
@@ -86,8 +87,12 @@ const blankProperty = (city: string, slots: SlotDef[], otas: string[] = DEFAULT_
   city,
   name,
   otas: [...otas],
+  hidden: [],
   slots: slots.map((s) => blankSlot(s.key, otas)),
 });
+
+// OTAs actually counted in the result (visible = not hidden).
+const visibleOtas = (p: BProperty) => p.otas.filter((o) => !(p.hidden ?? []).includes(o));
 
 export const seedBenchmark = (): BenchmarkData => ({
   slots: [...DEFAULT_SLOTS],
@@ -110,6 +115,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
         city: String(p.city ?? ""),
         name: String(p.name ?? ""),
         otas: [...otas],
+        hidden: [],
         slots: slots.map((sd) => {
           const os = oldSlots.find((x) => x.slot === sd.key) ?? {};
           return {
@@ -140,6 +146,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
       city: p.city,
       name: p.name,
       otas: [...otas],
+      hidden: [...((p as BProperty).hidden ?? [])],
       slots: slots.map((sd) => {
         const existing = p.slots?.find((s) => s.slot === sd.key);
         const base = existing ?? blankSlot(sd.key, otas);
@@ -262,19 +269,14 @@ export default function Benchmark({
     );
   };
 
-  const removeOta = (propId: number, name: string) =>
+  // Hide/show an OTA — data is kept either way; hidden OTAs drop out of the result.
+  const toggleOta = (propId: number, name: string) =>
     setBenchmark((b) =>
       mapProp(b, propId, (p) => {
-        if (p.otas.length <= 1) return p;
-        return {
-          ...p,
-          otas: p.otas.filter((o) => o !== name),
-          slots: p.slots.map((s) => {
-            const comps = { ...s.comps };
-            delete comps[name];
-            return { ...s, comps };
-          }),
-        };
+        const hidden = p.hidden ?? [];
+        return hidden.includes(name)
+          ? { ...p, hidden: hidden.filter((o) => o !== name) }
+          : { ...p, hidden: [...hidden, name] };
       })
     );
 
@@ -318,8 +320,9 @@ export default function Benchmark({
     const perProperty = new Map<number, number | null>();
     const perPropertyA = new Map<number, number | null>();
     for (const p of properties) {
-      const pcts = p.slots.map((s) => slotMarkupPct(s, p.otas, opexPct, globalReward)).filter((x): x is number => x !== null);
-      const pctsA = p.slots.map((s) => slotAgentMarkupPct(s, p.otas)).filter((x): x is number => x !== null);
+      const vis = visibleOtas(p);
+      const pcts = p.slots.map((s) => slotMarkupPct(s, vis, opexPct, globalReward)).filter((x): x is number => x !== null);
+      const pctsA = p.slots.map((s) => slotAgentMarkupPct(s, vis)).filter((x): x is number => x !== null);
       perProperty.set(p.id, median(pcts));
       perPropertyA.set(p.id, median(pctsA));
     }
@@ -392,8 +395,9 @@ export default function Benchmark({
           )}
 
           {propsByCity(city).map((p) => {
-            const cols = gridCols(p.otas.length);
-            const minW = gridMinW(p.otas.length);
+            const vis = visibleOtas(p);
+            const cols = gridCols(vis.length);
+            const minW = gridMinW(vis.length);
             return (
               <div className="bprop" key={p.id}>
                 <div className="bprop-head">
@@ -412,15 +416,15 @@ export default function Benchmark({
                   <button className="bprop-rm" onClick={() => removeProperty(p.id)} aria-label="Remove property">&times;</button>
                 </div>
 
-                {/* Per-property OTA manager */}
-                <OtaBar otas={p.otas} onAdd={(nm) => addOta(p.id, nm)} onRemove={(nm) => removeOta(p.id, nm)} />
+                {/* Per-property OTA manager (hide/show, non-destructive) */}
+                <OtaBar otas={p.otas} hidden={p.hidden ?? []} onAdd={(nm) => addOta(p.id, nm)} onToggle={(nm) => toggleOta(p.id, nm)} />
 
                 <div className="bslot-table">
                   <div className="bslot-row bslot-header" style={{ gridTemplateColumns: cols, minWidth: minW }}>
                     <span>Season slot</span>
                     <span>Dates</span>
                     <span>TBO</span>
-                    {p.otas.map((o) => (
+                    {vis.map((o) => (
                       <span key={o}>{o}</span>
                     ))}
                     <span>Reward%</span>
@@ -430,8 +434,8 @@ export default function Benchmark({
                   </div>
                   {slots.map((meta) => {
                     const s = p.slots.find((x) => x.slot === meta.key) ?? blankSlot(meta.key, p.otas);
-                    const mk = slotMarkupPct(s, p.otas, opexPct, globalReward);
-                    const mkA = slotAgentMarkupPct(s, p.otas);
+                    const mk = slotMarkupPct(s, vis, opexPct, globalReward);
+                    const mkA = slotAgentMarkupPct(s, vis);
                     const nights = slotNights(s.checkIn, s.checkOut);
                     const perNt = num(s.tbo) && nights > 1 ? num(s.tbo) / nights : null;
                     return (
@@ -453,7 +457,7 @@ export default function Benchmark({
                           onChange={(f, t) => updateSlotDates(p.id, meta.key, f, t)}
                         />
                         <BInput value={s.tbo} onChange={(v) => updateSlot(p.id, meta.key, "tbo", v)} />
-                        {p.otas.map((o) => (
+                        {vis.map((o) => (
                           <BInput key={o} value={s.comps[o] ?? ""} onChange={(v) => updateComp(p.id, meta.key, o, v)} />
                         ))}
                         <BInput value={s.reward} onChange={(v) => updateSlot(p.id, meta.key, "reward", v)} placeholder={String(globalReward)} />
@@ -497,20 +501,43 @@ export default function Benchmark({
   );
 }
 
-function OtaBar({ otas, onAdd, onRemove }: { otas: string[]; onAdd: (n: string) => void; onRemove: (n: string) => void }) {
+function OtaBar({
+  otas,
+  hidden,
+  onAdd,
+  onToggle,
+}: {
+  otas: string[];
+  hidden: string[];
+  onAdd: (n: string) => void;
+  onToggle: (n: string) => void;
+}) {
   const [val, setVal] = useState("");
   const add = () => { onAdd(val); setVal(""); };
+  const visibleCount = otas.filter((o) => !hidden.includes(o)).length;
   return (
     <div className="bench-config ota-bar">
       <span className="bcfg-label">OTAs</span>
-      {otas.map((o) => (
-        <span className="bcfg-chip" key={o}>
-          {o}
-          {otas.length > 1 && (
-            <button className="bcfg-x" onClick={() => onRemove(o)} aria-label={`Remove ${o}`}>&times;</button>
-          )}
-        </span>
-      ))}
+      {otas.map((o) => {
+        const isHidden = hidden.includes(o);
+        // Prevent hiding the last visible OTA (nothing left to compare against).
+        const canHide = isHidden || visibleCount > 1;
+        return (
+          <span className={"bcfg-chip" + (isHidden ? " ota-hidden" : "")} key={o}>
+            {o}
+            {canHide && (
+              <button
+                className="bcfg-x"
+                onClick={() => onToggle(o)}
+                aria-label={isHidden ? `Show ${o}` : `Hide ${o}`}
+                title={isHidden ? "Add back to result" : "Subtract from result (keeps data)"}
+              >
+                {isHidden ? "+" : "−"}
+              </button>
+            )}
+          </span>
+        );
+      })}
       <input
         className="bcfg-in"
         placeholder="Add OTA…"

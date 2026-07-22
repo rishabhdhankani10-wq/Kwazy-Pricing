@@ -528,6 +528,12 @@ html, body {
   background: var(--paper);
 }
 .ota-bar .bcfg-label { color: var(--gold); }
+.bcfg-chip.ota-hidden {
+  opacity: 0.5;
+  text-decoration: line-through;
+  background: var(--paper-2);
+}
+.bcfg-chip.ota-hidden .bcfg-x { color: var(--green); text-decoration: none; font-size: 14px; font-weight: 700; }
 
 .bench-city {
   margin-bottom: 20px;

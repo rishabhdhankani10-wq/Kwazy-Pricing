@@ -98,6 +98,7 @@ export default function Page() {
   const [portfolioTab, setPortfolioTab] = useState<PortfolioTab>("hotel");
   const [view, setView] = useState<View>("desk");
   const [benchmark, setBenchmark] = useState<BenchmarkData>(seedBenchmark);
+  const [saveWarning, setSaveWarning] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hotelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -132,6 +133,30 @@ export default function Page() {
       .catch(() => setSessionLoaded(true));
   }, []);
 
+  // ── Flush unsaved changes when the tab closes/reloads ───────────────────────
+  // Keeps a live snapshot; on pagehide we fire a keepalive save so anything
+  // added in the last debounce window isn't lost on a quick reload.
+  const latestRef = useRef({ rows, opexPct, rewardPct, benchmark, sessionLoaded });
+  useEffect(() => {
+    latestRef.current = { rows, opexPct, rewardPct, benchmark, sessionLoaded };
+  }, [rows, opexPct, rewardPct, benchmark, sessionLoaded]);
+  useEffect(() => {
+    const flush = () => {
+      const s = latestRef.current;
+      if (!s.sessionLoaded) return;
+      try {
+        fetch("/api/session", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rows: s.rows, opex_pct: s.opexPct, reward_pct: s.rewardPct, benchmark: s.benchmark }),
+          keepalive: true,
+        });
+      } catch {}
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
+
   // ── Load hotel history ──────────────────────────────────────────────────────
   const loadHistory = useCallback(() => {
     fetch("/api/hotels")
@@ -151,7 +176,13 @@ export default function Page() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rows: currentRows, opex_pct: currentOpex, reward_pct: currentReward, benchmark: currentBenchmark }),
       })
-        .then((r) => (r.ok ? setSaveStatus("saved") : setSaveStatus("error")))
+        .then(async (r) => {
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) { setSaveStatus("error"); return; }
+          // A warning means part of the data (e.g. benchmark) was NOT persisted.
+          if (body?.warning) { setSaveWarning(body.warning); setSaveStatus("error"); }
+          else { setSaveWarning(null); setSaveStatus("saved"); }
+        })
         .catch(() => setSaveStatus("error"))
         .finally(() => setTimeout(() => setSaveStatus("idle"), 2000));
     },
@@ -317,6 +348,12 @@ export default function Page() {
           {saveStatus === "error"  && <><span className="save-dot error"  />Save failed</>}
         </div>
       </header>
+
+      {saveWarning && (
+        <div className="save-warning">
+          ⚠ {saveWarning}. Your changes are NOT being saved. Run the migration in Supabase, then reload.
+        </div>
+      )}
 
       <nav className="view-nav">
         <button className={"view-tab" + (view === "desk" ? " on" : "")} onClick={() => setView("desk")}>Pricing Desk</button>

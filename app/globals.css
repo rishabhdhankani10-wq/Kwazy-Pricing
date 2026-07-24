@@ -327,6 +327,17 @@ html, body {
 .tot-value.pos { color: var(--green); }
 .tot-value.neg { color: var(--oxblood); }
 
+.save-warning {
+  background: #f7e9e9;
+  border: 1px solid var(--oxblood);
+  color: var(--oxblood);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 16px;
+}
+
 /* View nav (Desk | Benchmark) */
 .view-nav {
   display: flex;

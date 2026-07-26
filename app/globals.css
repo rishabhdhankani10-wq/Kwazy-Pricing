@@ -327,6 +327,22 @@ html, body {
 .tot-value.pos { color: var(--green); }
 .tot-value.neg { color: var(--oxblood); }
 
+.export-btn {
+  border: 1px solid var(--line-2);
+  background: var(--white);
+  border-radius: 5px;
+  padding: 7px 12px;
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+  margin-right: 10px;
+  transition: background .12s, color .12s;
+}
+.export-btn:hover { background: var(--ink); color: var(--paper); }
+
 .save-warning {
   background: #f7e9e9;
   border: 1px solid var(--oxblood);

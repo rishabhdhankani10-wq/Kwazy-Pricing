@@ -99,6 +99,10 @@ export default function Page() {
   const [view, setView] = useState<View>("desk");
   const [benchmark, setBenchmark] = useState<BenchmarkData>(seedBenchmark);
   const [saveWarning, setSaveWarning] = useState<string | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+  // High-water mark: the largest property count we've seen for this session.
+  // Used to refuse writes that would destroy data.
+  const maxPropsRef = useRef(0);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hotelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -128,9 +132,13 @@ export default function Page() {
         if (data && data.benchmark) {
           setBenchmark(normalizeBenchmark(data.benchmark));
         }
+        // Only unlock autosave after a CONFIRMED successful load. Previously this
+        // also ran on failure, so a failed load let the empty seed overwrite real data.
         setSessionLoaded(true);
       })
-      .catch(() => setSessionLoaded(true));
+      .catch(() => {
+        setLoadFailed(true); // stay locked: never autosave over unknown server state
+      });
   }, []);
 
   // ── Flush unsaved changes when the tab closes/reloads ───────────────────────
@@ -170,6 +178,18 @@ export default function Page() {
   // ── Auto-save board state (debounced 1.5s) ──────────────────────────────────
   const saveSession = useCallback(
     (currentRows: Row[], currentOpex: number, currentReward: number, currentBenchmark: BenchmarkData) => {
+      // ── Destructive-write guard ───────────────────────────────────────────
+      // Refuse any save that would collapse a large benchmark down to a few
+      // properties (the signature of the empty seed clobbering real data).
+      const n = currentBenchmark.properties.length;
+      if (n > maxPropsRef.current) maxPropsRef.current = n;
+      if (maxPropsRef.current >= 10 && n < maxPropsRef.current / 2) {
+        setSaveWarning(
+          `Refused to save: benchmark dropped from ${maxPropsRef.current} to ${n} properties. Reload the page — your saved data is untouched`
+        );
+        setSaveStatus("error");
+        return;
+      }
       setSaveStatus("saving");
       fetch("/api/session", {
         method: "PUT",
@@ -342,6 +362,23 @@ export default function Page() {
           <h1>Kwazy Pricing Desk</h1>
           <p className="sub">TBO cost vs. competitor retail. Solve for max markup, reward rate, and margin per room-night.</p>
         </div>
+        <button
+          className="export-btn"
+          onClick={() => {
+            const blob = new Blob(
+              [JSON.stringify({ rows, opex_pct: opexPct, reward_pct: rewardPct, benchmark }, null, 2)],
+              { type: "application/json" }
+            );
+            const a = document.createElement("a");
+            a.href = URL.createObjectURL(blob);
+            a.download = `kwazy-backup-${new Date().toISOString().slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+          }}
+          title="Download a local backup of all your data"
+        >
+          ↓ Export backup
+        </button>
         <div className="save-status" data-status={saveStatus}>
           {saveStatus === "saving" && <><span className="save-dot saving" />Saving…</>}
           {saveStatus === "saved"  && <><span className="save-dot saved"  />Saved</>}
@@ -349,11 +386,13 @@ export default function Page() {
         </div>
       </header>
 
-      {saveWarning && (
+      {loadFailed && (
         <div className="save-warning">
-          ⚠ {saveWarning}. Your changes are NOT being saved. Run the migration in Supabase, then reload.
+          ⚠ Could not load your saved data. Auto-save is disabled to protect it — reload the page. Nothing has been overwritten.
         </div>
       )}
+
+      {saveWarning && <div className="save-warning">⚠ {saveWarning}.</div>}
 
       <nav className="view-nav">
         <button className={"view-tab" + (view === "desk" ? " on" : "")} onClick={() => setView("desk")}>Pricing Desk</button>

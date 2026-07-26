@@ -362,6 +362,41 @@ export default function Page() {
           <h1>Kwazy Pricing Desk</h1>
           <p className="sub">TBO cost vs. competitor retail. Solve for max markup, reward rate, and margin per room-night.</p>
         </div>
+        <label className="export-btn" title="Restore from a backup JSON file">
+          ↑ Import
+          <input
+            type="file"
+            accept="application/json,.json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              const reader = new FileReader();
+              reader.onload = () => {
+                try {
+                  const parsed = JSON.parse(String(reader.result));
+                  const bm = parsed.benchmark ?? parsed; // accept full backup or bare benchmark
+                  const norm = normalizeBenchmark(bm);
+                  if (!norm.properties.length) { alert("No properties found in that file."); return; }
+                  maxPropsRef.current = 0; // allow the incoming count to set a new baseline
+                  setBenchmark(norm);
+                  if (Array.isArray(parsed.rows) && parsed.rows.length) {
+                    setRows(parsed.rows.map((r: Partial<Row>) => ({ ...blankRow(), ...r, id: nextId++ })));
+                  }
+                  if (parsed.opex_pct != null) setOpexPct(Number(parsed.opex_pct));
+                  if (parsed.reward_pct != null) setRewardPct(Number(parsed.reward_pct));
+                  setLoadFailed(false);
+                  setSessionLoaded(true); // unlock saving so the import persists
+                  alert(`Imported ${norm.properties.length} properties. Saving…`);
+                } catch {
+                  alert("Could not read that file — is it the backup JSON?");
+                }
+              };
+              reader.readAsText(file);
+              e.target.value = "";
+            }}
+          />
+        </label>
         <button
           className="export-btn"
           onClick={() => {

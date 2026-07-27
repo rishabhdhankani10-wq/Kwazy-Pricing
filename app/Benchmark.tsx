@@ -248,7 +248,9 @@ export function roveCalcSlot(
   if (!headlines.length) return null;
   const sell = Math.min(...headlines);
   const commission = (sell - tbo) / 1.18;
-  const maxRewardPct = (commission - sell * (opexPct / 100)) / sell;
+  // Gross of OPEX: this is the whole commission you retain, as a % of the price.
+  // OPEX is deliberately NOT deducted — that call is yours.
+  const maxRewardPct = commission / sell;
   return {
     roveInrPerNight: rove > 0 ? rove : null,   // converted, per night
     roveEff: rove > 0 ? rove * (1 - ret) : null,
@@ -259,9 +261,9 @@ export function roveCalcSlot(
 
 const gridCols = (n: number, rove: boolean) =>
   rove
-    ? `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.9fr 0.7fr 0.9fr 0.9fr 0.85fr`
+    ? `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.9fr 0.7fr 0.95fr 0.8fr 0.8fr`
     : `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
-const gridMinW = (n: number, rove: boolean) => (rove ? 780 : 630) + n * 105;
+const gridMinW = (n: number, rove: boolean) => (rove ? 800 : 630) + n * 105;
 
 // ── Component ───────────────────────────────────────────────────────────────
 export default function Benchmark({
@@ -569,8 +571,8 @@ export default function Benchmark({
                         <span>Rove ($)</span>
                         <span>Return%</span>
                         <span>Rove eff. ₹</span>
-                        <span>Our max rwd</span>
-                        <span>Headroom</span>
+                        <span>Markup</span>
+                        <span>Agent</span>
                       </>
                     ) : (
                       <>
@@ -620,13 +622,14 @@ export default function Benchmark({
                             <BInput value={s.roveReturn ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveReturn", v)} placeholder="0" />
                             {(() => {
                               const rc = roveCalcSlot(s, p.otas, p.hidden ?? [], opexPct, usdRateNum);
-                              const hr = rc?.headroom;
                               return (
                                 <>
                                   <span className="bslot-mk">{rc?.roveEff != null ? fmt(rc.roveEff) : "—"}</span>
-                                  <span className="bslot-mk agent">{rc?.maxRewardPct != null ? pct(rc.maxRewardPct) : "—"}</span>
-                                  <span className={"bslot-mk " + (hr == null ? "" : hr >= 0 ? "pos" : "neg")}>
-                                    {hr != null ? pct(hr) : "—"}
+                                  <span className={"bslot-mk" + (mk != null && mk < 0 ? " neg" : mk != null ? " pos" : "")}>
+                                    {mk != null ? pct(mk) : "—"}
+                                  </span>
+                                  <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
+                                    {mkA != null ? pct(mkA) : "—"}
                                   </span>
                                 </>
                               );

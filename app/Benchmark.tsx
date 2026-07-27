@@ -36,6 +36,8 @@ export type BSlot = {
   breakfast: boolean;
   freeCancellation: boolean;
   roomType: string;
+  roveP?: string;                   // Rove price (rove board only)
+  roveReturn?: string;              // Rove return %, e.g. "40"
 };
 
 export type BProperty = {
@@ -47,24 +49,15 @@ export type BProperty = {
   slots: BSlot[];
 };
 
-// Rove comparison rows — independent list, stored inside the same jsonb blob
-// so no DB migration is required.
-export type RoveRow = {
-  id: number;
-  city: string;
-  name: string;
-  checkIn: string;
-  checkOut: string;
-  tbo: string;
-  mmt: string;
-  rove: string;
-  roveReturn: string; // percent, e.g. "40"
+export type Board = {
+  slots: SlotDef[];                 // time slots (per board)
+  properties: BProperty[];
 };
 
-export type BenchmarkData = {
-  slots: SlotDef[];                 // time slots stay global
-  properties: BProperty[];
-  rove?: RoveRow[];
+// The Rove board is a second, independent board stored inside the same jsonb
+// blob — so no DB migration is required.
+export type BenchmarkData = Board & {
+  roveBoard?: Board;
 };
 
 const num = (s: string) => {
@@ -112,7 +105,7 @@ const visibleOtas = (p: BProperty) => p.otas.filter((o) => !(p.hidden ?? []).inc
 export const seedBenchmark = (): BenchmarkData => ({
   slots: [...DEFAULT_SLOTS],
   properties: CITY_BUCKETS.map((c) => blankProperty(c, DEFAULT_SLOTS)),
-  rove: [],
+  roveBoard: { slots: [...DEFAULT_SLOTS], properties: [] },
 });
 
 // Migrate old (BProperty[] with mmt/goibibo/booking, or object w/ global otas)
@@ -149,7 +142,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
         }),
       } as BProperty;
     });
-    return { slots, properties, rove: [] };
+    return { slots, properties, roveBoard: { slots: [...DEFAULT_SLOTS], properties: [] } };
   }
 
   const d = raw as Partial<BenchmarkData> & { otas?: string[] };
@@ -172,21 +165,28 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
       }),
     } as BProperty;
   });
-  // Preserve Rove rows verbatim; never drop them on load.
-  const rove: RoveRow[] = Array.isArray(d.rove)
-    ? d.rove.map((r, i) => ({
-        id: i + 1,
-        city: String(r.city ?? ""),
-        name: String(r.name ?? ""),
-        checkIn: String(r.checkIn ?? ""),
-        checkOut: String(r.checkOut ?? ""),
-        tbo: String(r.tbo ?? ""),
-        mmt: String(r.mmt ?? ""),
-        rove: String(r.rove ?? ""),
-        roveReturn: String(r.roveReturn ?? ""),
-      }))
-    : [];
-  return { slots, properties, rove };
+  // Normalize the nested Rove board the same way; never drop it on load.
+  const rb = d.roveBoard as Partial<Board> | undefined;
+  const rSlots = rb?.slots && rb.slots.length ? rb.slots : [...DEFAULT_SLOTS];
+  const rProps = (rb?.properties ?? []).map((p) => {
+    const otas = p.otas?.length ? p.otas : [...DEFAULT_OTAS];
+    return {
+      id: bId++,
+      city: p.city,
+      name: p.name,
+      otas: [...otas],
+      hidden: [...(p.hidden ?? [])],
+      slots: rSlots.map((sd) => {
+        const existing = p.slots?.find((s) => s.slot === sd.key);
+        const base = existing ?? blankSlot(sd.key, otas);
+        const comps: Record<string, string> = {};
+        for (const o of otas) comps[o] = base.comps?.[o] ?? "";
+        return { ...blankSlot(sd.key, otas), ...base, comps };
+      }),
+    } as BProperty;
+  });
+
+  return { slots, properties, roveBoard: { slots: rSlots, properties: rProps } };
 }
 
 const median = (xs: number[]): number | null => {
@@ -219,9 +219,33 @@ function slotAgentMarkupPct(slot: BSlot, otas: string[]): number | null {
   return ((sell - tbo) / 1.18) / tbo;
 }
 
-const gridCols = (n: number) =>
-  `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
-const gridMinW = (n: number) => 630 + n * 105;
+// Rove economics for one slot (agent basis: 18% GST on your commission only).
+// Returns Rove's effective price, the reward you could afford at the cheapest
+// headline, and the headroom between the two.
+export function roveCalcSlot(s: BSlot, otas: string[], hidden: string[], opexPct: number) {
+  const n = slotNights(s.checkIn, s.checkOut);
+  const tbo = num(s.tbo) / n;
+  const rove = num(s.roveP ?? "") / n;
+  const ret = num(s.roveReturn ?? "") / 100;
+  if (!tbo) return null;
+  const vis = otas.filter((o) => !hidden.includes(o));
+  const headlines = [...vis.map((o) => num(s.comps[o]) / n), rove].filter((x) => x > 0);
+  if (!headlines.length) return null;
+  const sell = Math.min(...headlines);
+  const commission = (sell - tbo) / 1.18;
+  const maxRewardPct = (commission - sell * (opexPct / 100)) / sell;
+  return {
+    roveEff: rove > 0 ? rove * (1 - ret) : null,
+    maxRewardPct,
+    headroom: rove > 0 ? maxRewardPct - ret : null,
+  };
+}
+
+const gridCols = (n: number, rove: boolean) =>
+  rove
+    ? `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.9fr 0.7fr 0.9fr 0.9fr 0.85fr`
+    : `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
+const gridMinW = (n: number, rove: boolean) => (rove ? 780 : 630) + n * 105;
 
 // ── Component ───────────────────────────────────────────────────────────────
 export default function Benchmark({
@@ -229,17 +253,23 @@ export default function Benchmark({
   setBenchmark,
   opexPct,
   globalReward,
+  roveMode = false,
+  title = "Rate Benchmark",
+  subtitle = "Same properties, sampled across a lead-time × season grid. Median markup you can add per property, averaged across cities.",
 }: {
-  benchmark: BenchmarkData;
-  setBenchmark: (updater: (b: BenchmarkData) => BenchmarkData) => void;
+  benchmark: Board;
+  setBenchmark: (updater: (b: Board) => Board) => void;
   opexPct: number;
   globalReward: number;
+  roveMode?: boolean;
+  title?: string;
+  subtitle?: string;
 }) {
   const { slots, properties } = benchmark;
   const [newCity, setNewCity] = useState("");
   const [newSlot, setNewSlot] = useState("");
 
-  const mapProp = (b: BenchmarkData, propId: number, fn: (p: BProperty) => BProperty) => ({
+  const mapProp = (b: Board, propId: number, fn: (p: BProperty) => BProperty) => ({
     ...b,
     properties: b.properties.map((p) => (p.id === propId ? fn(p) : p)),
   });
@@ -407,10 +437,8 @@ export default function Benchmark({
     <div className="bench">
       <div className="bench-head">
         <div>
-          <h2>Rate Benchmark</h2>
-          <p className="bench-sub">
-            Same properties, sampled across a lead-time × season grid. Median markup you can add per property, averaged across cities.
-          </p>
+          <h2>{title}</h2>
+          <p className="bench-sub">{subtitle}</p>
         </div>
         <div className="bench-overall">
           <span className="bench-overall-label">Overall markup · med / avg</span>
@@ -469,8 +497,8 @@ export default function Benchmark({
 
           {propsByCity(city).map((p) => {
             const vis = visibleOtas(p);
-            const cols = gridCols(vis.length);
-            const minW = gridMinW(vis.length);
+            const cols = gridCols(vis.length, roveMode);
+            const minW = gridMinW(vis.length, roveMode);
             return (
               <div className="bprop" key={p.id}>
                 <div className="bprop-head">
@@ -502,10 +530,22 @@ export default function Benchmark({
                     {vis.map((o) => (
                       <span key={o}>{o}</span>
                     ))}
-                    <span>Reward%</span>
-                    <span>Incl.</span>
-                    <span>Markup</span>
-                    <span>Agent</span>
+                    {roveMode ? (
+                      <>
+                        <span>Rove</span>
+                        <span>Return%</span>
+                        <span>Rove eff.</span>
+                        <span>Our max rwd</span>
+                        <span>Headroom</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Reward%</span>
+                        <span>Incl.</span>
+                        <span>Markup</span>
+                        <span>Agent</span>
+                      </>
+                    )}
                   </div>
                   {slots.map((meta) => {
                     const s = p.slots.find((x) => x.slot === meta.key) ?? blankSlot(meta.key, p.otas);
@@ -535,23 +575,45 @@ export default function Benchmark({
                         {vis.map((o) => (
                           <BInput key={o} value={s.comps[o] ?? ""} onChange={(v) => updateComp(p.id, meta.key, o, v)} />
                         ))}
-                        <BInput value={s.reward} onChange={(v) => updateSlot(p.id, meta.key, "reward", v)} placeholder={String(globalReward)} />
-                        <span className="bslot-incl">
-                          <label title="Breakfast included">
-                            <input type="checkbox" checked={s.breakfast} onChange={(e) => updateSlot(p.id, meta.key, "breakfast", e.target.checked)} />
-                            B
-                          </label>
-                          <label title="Free cancellation">
-                            <input type="checkbox" checked={s.freeCancellation} onChange={(e) => updateSlot(p.id, meta.key, "freeCancellation", e.target.checked)} />
-                            FC
-                          </label>
-                        </span>
-                        <span className={"bslot-mk" + (mk != null && mk < 0 ? " neg" : mk != null ? " pos" : "")}>
-                          {mk != null ? pct(mk) : "—"}
-                        </span>
-                        <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
-                          {mkA != null ? pct(mkA) : "—"}
-                        </span>
+                        {roveMode ? (
+                          <>
+                            <BInput value={s.roveP ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveP", v)} />
+                            <BInput value={s.roveReturn ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveReturn", v)} placeholder="0" />
+                            {(() => {
+                              const rc = roveCalcSlot(s, p.otas, p.hidden ?? [], opexPct);
+                              const hr = rc?.headroom;
+                              return (
+                                <>
+                                  <span className="bslot-mk">{rc?.roveEff != null ? fmt(rc.roveEff) : "—"}</span>
+                                  <span className="bslot-mk agent">{rc?.maxRewardPct != null ? pct(rc.maxRewardPct) : "—"}</span>
+                                  <span className={"bslot-mk " + (hr == null ? "" : hr >= 0 ? "pos" : "neg")}>
+                                    {hr != null ? pct(hr) : "—"}
+                                  </span>
+                                </>
+                              );
+                            })()}
+                          </>
+                        ) : (
+                          <>
+                            <BInput value={s.reward} onChange={(v) => updateSlot(p.id, meta.key, "reward", v)} placeholder={String(globalReward)} />
+                            <span className="bslot-incl">
+                              <label title="Breakfast included">
+                                <input type="checkbox" checked={s.breakfast} onChange={(e) => updateSlot(p.id, meta.key, "breakfast", e.target.checked)} />
+                                B
+                              </label>
+                              <label title="Free cancellation">
+                                <input type="checkbox" checked={s.freeCancellation} onChange={(e) => updateSlot(p.id, meta.key, "freeCancellation", e.target.checked)} />
+                                FC
+                              </label>
+                            </span>
+                            <span className={"bslot-mk" + (mk != null && mk < 0 ? " neg" : mk != null ? " pos" : "")}>
+                              {mk != null ? pct(mk) : "—"}
+                            </span>
+                            <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
+                              {mkA != null ? pct(mkA) : "—"}
+                            </span>
+                          </>
+                        )}
                       </div>
                     );
                   })}

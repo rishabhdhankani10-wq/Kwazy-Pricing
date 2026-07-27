@@ -2,9 +2,8 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { compute, fmt, pct, type Result } from "./engine";
-import Benchmark, { type BenchmarkData, seedBenchmark, normalizeBenchmark } from "./Benchmark";
+import Benchmark, { type BenchmarkData, type Board, seedBenchmark, normalizeBenchmark, DEFAULT_SLOTS } from "./Benchmark";
 import DateRange from "./DateRange";
-import RoveWatch from "./RoveWatch";
 
 type CostMode = "night" | "total";
 type View = "desk" | "benchmark" | "rove";
@@ -437,11 +436,29 @@ export default function Page() {
       </nav>
 
       {view === "benchmark" && (
-        <Benchmark benchmark={benchmark} setBenchmark={setBenchmark} opexPct={opexPct} globalReward={rewardPct} />
+        <Benchmark
+          benchmark={benchmark}
+          setBenchmark={(fn) => setBenchmark((b) => ({ ...b, ...fn(b) }))}
+          opexPct={opexPct}
+          globalReward={rewardPct}
+        />
       )}
 
       {view === "rove" && (
-        <RoveWatch benchmark={benchmark} setBenchmark={setBenchmark} opexPct={opexPct} />
+        <Benchmark
+          roveMode
+          title="Rove Watch"
+          subtitle="Rove's headline price minus their return is their real price. Headroom shows whether you can match it and still break even."
+          benchmark={benchmark.roveBoard ?? { slots: DEFAULT_SLOTS, properties: [] }}
+          setBenchmark={(fn) =>
+            setBenchmark((b) => ({
+              ...b,
+              roveBoard: fn(b.roveBoard ?? { slots: DEFAULT_SLOTS, properties: [] }),
+            }))
+          }
+          opexPct={opexPct}
+          globalReward={rewardPct}
+        />
       )}
 
       {view === "desk" && (<>

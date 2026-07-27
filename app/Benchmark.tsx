@@ -52,7 +52,10 @@ export type BProperty = {
 export type Board = {
   slots: SlotDef[];                 // time slots (per board)
   properties: BProperty[];
+  usdRate?: string;                 // USD→INR rate (Rove board only)
 };
+
+export const DEFAULT_USD_RATE = "97";
 
 // The Rove board is a second, independent board stored inside the same jsonb
 // blob — so no DB migration is required.
@@ -105,7 +108,7 @@ const visibleOtas = (p: BProperty) => p.otas.filter((o) => !(p.hidden ?? []).inc
 export const seedBenchmark = (): BenchmarkData => ({
   slots: [...DEFAULT_SLOTS],
   properties: CITY_BUCKETS.map((c) => blankProperty(c, DEFAULT_SLOTS)),
-  roveBoard: { slots: [...DEFAULT_SLOTS], properties: [] },
+  roveBoard: { slots: [...DEFAULT_SLOTS], properties: [], usdRate: DEFAULT_USD_RATE },
 });
 
 // Migrate old (BProperty[] with mmt/goibibo/booking, or object w/ global otas)
@@ -186,7 +189,11 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
     } as BProperty;
   });
 
-  return { slots, properties, roveBoard: { slots: rSlots, properties: rProps } };
+  return {
+    slots,
+    properties,
+    roveBoard: { slots: rSlots, properties: rProps, usdRate: rb?.usdRate ?? DEFAULT_USD_RATE },
+  };
 }
 
 const median = (xs: number[]): number | null => {
@@ -222,10 +229,18 @@ function slotAgentMarkupPct(slot: BSlot, otas: string[]): number | null {
 // Rove economics for one slot (agent basis: 18% GST on your commission only).
 // Returns Rove's effective price, the reward you could afford at the cheapest
 // headline, and the headroom between the two.
-export function roveCalcSlot(s: BSlot, otas: string[], hidden: string[], opexPct: number) {
+export function roveCalcSlot(
+  s: BSlot,
+  otas: string[],
+  hidden: string[],
+  opexPct: number,
+  usdRate = Number(DEFAULT_USD_RATE)
+) {
   const n = slotNights(s.checkIn, s.checkOut);
   const tbo = num(s.tbo) / n;
-  const rove = num(s.roveP ?? "") / n;
+  // Rove prices are entered in USD; convert to INR before any comparison.
+  const roveInr = num(s.roveP ?? "") * usdRate;
+  const rove = roveInr / n;
   const ret = num(s.roveReturn ?? "") / 100;
   if (!tbo) return null;
   const vis = otas.filter((o) => !hidden.includes(o));
@@ -235,6 +250,7 @@ export function roveCalcSlot(s: BSlot, otas: string[], hidden: string[], opexPct
   const commission = (sell - tbo) / 1.18;
   const maxRewardPct = (commission - sell * (opexPct / 100)) / sell;
   return {
+    roveInrPerNight: rove > 0 ? rove : null,   // converted, per night
     roveEff: rove > 0 ? rove * (1 - ret) : null,
     maxRewardPct,
     headroom: rove > 0 ? maxRewardPct - ret : null,
@@ -266,6 +282,7 @@ export default function Benchmark({
   subtitle?: string;
 }) {
   const { slots, properties } = benchmark;
+  const usdRateNum = num(benchmark.usdRate ?? DEFAULT_USD_RATE) || Number(DEFAULT_USD_RATE);
   const [newCity, setNewCity] = useState("");
   const [newSlot, setNewSlot] = useState("");
 
@@ -455,6 +472,23 @@ export default function Benchmark({
         </div>
       </div>
 
+      {roveMode && (
+        <div className="bench-config">
+          <span className="bcfg-label">USD → INR</span>
+          <span className="bcfg-chip">
+            1 USD =&nbsp;
+            <input
+              className="usd-rate"
+              inputMode="decimal"
+              value={benchmark.usdRate ?? DEFAULT_USD_RATE}
+              onChange={(e) => setBenchmark((b) => ({ ...b, usdRate: e.target.value }))}
+            />
+            &nbsp;INR
+          </span>
+          <span className="bcfg-note">Rove prices are entered in USD and converted at this rate.</span>
+        </div>
+      )}
+
       {/* Slot manager (global) */}
       <div className="bench-config">
         <span className="bcfg-label">Time slots</span>
@@ -532,9 +566,9 @@ export default function Benchmark({
                     ))}
                     {roveMode ? (
                       <>
-                        <span>Rove</span>
+                        <span>Rove ($)</span>
                         <span>Return%</span>
-                        <span>Rove eff.</span>
+                        <span>Rove eff. ₹</span>
                         <span>Our max rwd</span>
                         <span>Headroom</span>
                       </>
@@ -577,10 +611,15 @@ export default function Benchmark({
                         ))}
                         {roveMode ? (
                           <>
-                            <BInput value={s.roveP ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveP", v)} />
+                            <span className="rove-usd">
+                              <BInput value={s.roveP ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveP", v)} />
+                              {num(s.roveP ?? "") > 0 && (
+                                <em className="rove-inr">= {fmt(num(s.roveP ?? "") * usdRateNum)}</em>
+                              )}
+                            </span>
                             <BInput value={s.roveReturn ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveReturn", v)} placeholder="0" />
                             {(() => {
-                              const rc = roveCalcSlot(s, p.otas, p.hidden ?? [], opexPct);
+                              const rc = roveCalcSlot(s, p.otas, p.hidden ?? [], opexPct, usdRateNum);
                               const hr = rc?.headroom;
                               return (
                                 <>

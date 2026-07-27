@@ -516,6 +516,29 @@ html, body {
 .bl-label { font-size: 11.5px; font-weight: 600; color: var(--ink); font-family: 'JetBrains Mono', monospace; }
 .bl-tag { font-size: 9.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.05em; }
 
+.usd-rate {
+  width: 46px;
+  border: none;
+  border-bottom: 1px solid var(--line-2);
+  background: transparent;
+  outline: none;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+}
+.usd-rate:focus { border-bottom-color: var(--ink); }
+.bcfg-note { font-size: 10.5px; color: var(--ink-soft); font-style: italic; }
+.rove-usd { display: flex; flex-direction: column; gap: 1px; }
+.rove-inr {
+  font-style: normal;
+  font-size: 9.5px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--gold);
+  font-weight: 600;
+}
+
 /* Rove Watch table */
 .rove-row {
   display: grid;

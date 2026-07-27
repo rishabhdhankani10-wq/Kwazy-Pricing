@@ -4,9 +4,10 @@ import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { compute, fmt, pct, type Result } from "./engine";
 import Benchmark, { type BenchmarkData, seedBenchmark, normalizeBenchmark } from "./Benchmark";
 import DateRange from "./DateRange";
+import RoveWatch from "./RoveWatch";
 
 type CostMode = "night" | "total";
-type View = "desk" | "benchmark";
+type View = "desk" | "benchmark" | "rove";
 
 type Row = {
   id: number;
@@ -432,10 +433,15 @@ export default function Page() {
       <nav className="view-nav">
         <button className={"view-tab" + (view === "desk" ? " on" : "")} onClick={() => setView("desk")}>Pricing Desk</button>
         <button className={"view-tab" + (view === "benchmark" ? " on" : "")} onClick={() => setView("benchmark")}>Rate Benchmark</button>
+        <button className={"view-tab" + (view === "rove" ? " on" : "")} onClick={() => setView("rove")}>Rove Watch</button>
       </nav>
 
       {view === "benchmark" && (
         <Benchmark benchmark={benchmark} setBenchmark={setBenchmark} opexPct={opexPct} globalReward={rewardPct} />
+      )}
+
+      {view === "rove" && (
+        <RoveWatch benchmark={benchmark} setBenchmark={setBenchmark} opexPct={opexPct} />
       )}
 
       {view === "desk" && (<>

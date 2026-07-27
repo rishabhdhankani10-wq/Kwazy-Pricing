@@ -516,6 +516,27 @@ html, body {
 .bl-label { font-size: 11.5px; font-weight: 600; color: var(--ink); font-family: 'JetBrains Mono', monospace; }
 .bl-tag { font-size: 9.5px; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.05em; }
 
+/* Rove Watch table */
+.rove-row {
+  display: grid;
+  grid-template-columns: 0.9fr 1.6fr 1.3fr 0.85fr 0.85fr 0.85fr 0.7fr 0.9fr 1fr 0.85fr 28px;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--line);
+  min-width: 1080px;
+}
+.rove-row:last-of-type { border-bottom: none; }
+.rove-header {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+  font-weight: 700;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--line-2);
+}
+
 .bench-addcity {
   display: flex;
   gap: 8px;

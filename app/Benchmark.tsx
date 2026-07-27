@@ -47,9 +47,24 @@ export type BProperty = {
   slots: BSlot[];
 };
 
+// Rove comparison rows — independent list, stored inside the same jsonb blob
+// so no DB migration is required.
+export type RoveRow = {
+  id: number;
+  city: string;
+  name: string;
+  checkIn: string;
+  checkOut: string;
+  tbo: string;
+  mmt: string;
+  rove: string;
+  roveReturn: string; // percent, e.g. "40"
+};
+
 export type BenchmarkData = {
   slots: SlotDef[];                 // time slots stay global
   properties: BProperty[];
+  rove?: RoveRow[];
 };
 
 const num = (s: string) => {
@@ -97,6 +112,7 @@ const visibleOtas = (p: BProperty) => p.otas.filter((o) => !(p.hidden ?? []).inc
 export const seedBenchmark = (): BenchmarkData => ({
   slots: [...DEFAULT_SLOTS],
   properties: CITY_BUCKETS.map((c) => blankProperty(c, DEFAULT_SLOTS)),
+  rove: [],
 });
 
 // Migrate old (BProperty[] with mmt/goibibo/booking, or object w/ global otas)
@@ -133,7 +149,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
         }),
       } as BProperty;
     });
-    return { slots, properties };
+    return { slots, properties, rove: [] };
   }
 
   const d = raw as Partial<BenchmarkData> & { otas?: string[] };
@@ -156,7 +172,21 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
       }),
     } as BProperty;
   });
-  return { slots, properties };
+  // Preserve Rove rows verbatim; never drop them on load.
+  const rove: RoveRow[] = Array.isArray(d.rove)
+    ? d.rove.map((r, i) => ({
+        id: i + 1,
+        city: String(r.city ?? ""),
+        name: String(r.name ?? ""),
+        checkIn: String(r.checkIn ?? ""),
+        checkOut: String(r.checkOut ?? ""),
+        tbo: String(r.tbo ?? ""),
+        mmt: String(r.mmt ?? ""),
+        rove: String(r.rove ?? ""),
+        roveReturn: String(r.roveReturn ?? ""),
+      }))
+    : [];
+  return { slots, properties, rove };
 }
 
 const median = (xs: number[]): number | null => {

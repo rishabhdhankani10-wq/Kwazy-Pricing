@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { compute, fmt, pct, type Result } from "./engine";
-import Benchmark, { type BenchmarkData, type Board, seedBenchmark, normalizeBenchmark, DEFAULT_SLOTS } from "./Benchmark";
+import Benchmark, { type BenchmarkData, seedBenchmark, normalizeBenchmark, DEFAULT_SLOTS } from "./Benchmark";
 import DateRange from "./DateRange";
 
 type CostMode = "night" | "total";

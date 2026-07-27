@@ -251,19 +251,26 @@ export function roveCalcSlot(
   // Gross of OPEX: this is the whole commission you retain, as a % of the price.
   // OPEX is deliberately NOT deducted — that call is yours.
   const maxRewardPct = commission / sell;
+  // Rove's price gap vs the cheapest OTA (same reference price the Markup column
+  // uses). Positive = Rove is more expensive than the OTA; negative = cheaper.
+  const otaPrices = vis.map((o) => num(s.comps[o]) / n).filter((x) => x > 0);
+  const otaRef = otaPrices.length ? Math.min(...otaPrices) : null;
+  const roveVsOta = otaRef && rove > 0 ? (rove - otaRef) / otaRef : null;
+
   return {
     roveInrPerNight: rove > 0 ? rove : null,   // converted, per night
     roveEff: rove > 0 ? rove * (1 - ret) : null,
     maxRewardPct,
     headroom: rove > 0 ? maxRewardPct - ret : null,
+    roveVsOta,
   };
 }
 
 const gridCols = (n: number, rove: boolean) =>
   rove
-    ? `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.9fr 0.7fr 0.8fr 0.8fr`
+    ? `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.9fr 0.7fr 0.8fr 0.8fr 0.8fr`
     : `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
-const gridMinW = (n: number, rove: boolean) => (rove ? 720 : 630) + n * 105;
+const gridMinW = (n: number, rove: boolean) => (rove ? 800 : 630) + n * 105;
 
 // ── Component ───────────────────────────────────────────────────────────────
 export default function Benchmark({
@@ -572,6 +579,7 @@ export default function Benchmark({
                         <span>Return%</span>
                         <span>Markup</span>
                         <span>Agent</span>
+                        <span>Rove mk</span>
                       </>
                     ) : (
                       <>
@@ -625,6 +633,14 @@ export default function Benchmark({
                             <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
                               {mkA != null ? pct(mkA) : "—"}
                             </span>
+                            {(() => {
+                              const rv = roveCalcSlot(s, p.otas, p.hidden ?? [], opexPct, usdRateNum)?.roveVsOta;
+                              return (
+                                <span className={"bslot-mk " + (rv == null ? "" : rv >= 0 ? "pos" : "neg")}>
+                                  {rv != null ? pct(rv) : "—"}
+                                </span>
+                              );
+                            })()}
                           </>
                         ) : (
                           <>

@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { compute, fmt, pct, type Result } from "./engine";
-import Benchmark, { type BenchmarkData, seedBenchmark, normalizeBenchmark, DEFAULT_SLOTS } from "./Benchmark";
+import Benchmark, { type BenchmarkData, type BProperty, seedBenchmark, normalizeBenchmark, DEFAULT_SLOTS } from "./Benchmark";
 import DateRange from "./DateRange";
 
 type CostMode = "night" | "total";
@@ -100,9 +100,13 @@ export default function Page() {
   const [benchmark, setBenchmark] = useState<BenchmarkData>(seedBenchmark);
   const [saveWarning, setSaveWarning] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  // Properties deleted locally — sent explicitly so the server-side merge knows
+  // to drop them (otherwise merging would resurrect them).
+  const deletedUidsRef = useRef<string[]>([]);
   // High-water mark: the largest property count we've seen for this session.
   // Used to refuse writes that would destroy data.
-  const maxPropsRef = useRef(0);
+  // Last successfully-saved benchmark; used to compute what changed.
+  const lastSavedRef = useRef<BenchmarkData | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hotelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -130,7 +134,9 @@ export default function Page() {
           if (data.reward_pct != null) setRewardPct(Number(data.reward_pct));
         }
         if (data && data.benchmark) {
-          setBenchmark(normalizeBenchmark(data.benchmark));
+          const norm = normalizeBenchmark(data.benchmark);
+          setBenchmark(norm);
+          lastSavedRef.current = norm;
         }
         // Only unlock autosave after a CONFIRMED successful load. Previously this
         // also ran on failure, so a failed load let the empty seed overwrite real data.
@@ -178,27 +184,43 @@ export default function Page() {
   // ── Auto-save board state (debounced 1.5s) ──────────────────────────────────
   const saveSession = useCallback(
     (currentRows: Row[], currentOpex: number, currentReward: number, currentBenchmark: BenchmarkData) => {
-      // ── Destructive-write guard ───────────────────────────────────────────
-      // Refuse any save that would collapse a large benchmark down to a few
-      // properties (the signature of the empty seed clobbering real data).
-      const n = currentBenchmark.properties.length;
-      if (n > maxPropsRef.current) maxPropsRef.current = n;
-      if (maxPropsRef.current >= 10 && n < maxPropsRef.current / 2) {
-        setSaveWarning(
-          `Refused to save: benchmark dropped from ${maxPropsRef.current} to ${n} properties. Reload the page — your saved data is untouched`
-        );
-        setSaveStatus("error");
-        return;
+      // ── Send only what changed ────────────────────────────────────────────
+      // Each client sends just the properties it actually edited. The server
+      // merges them in, so a stale copy can never revert someone else's work on
+      // a different hotel. Untouched properties are simply not transmitted.
+      const prev = lastSavedRef.current;
+      const changedProps = (cur: BProperty[], old?: BProperty[]) => {
+        if (!old) return cur;
+        const oldByUid = new Map(old.map((p) => [p.uid, JSON.stringify(p)]));
+        return cur.filter((p) => oldByUid.get(p.uid) !== JSON.stringify(p));
+      };
+      const delta: BenchmarkData = {
+        ...currentBenchmark,
+        properties: changedProps(currentBenchmark.properties, prev?.properties),
+      };
+      if (currentBenchmark.roveBoard) {
+        delta.roveBoard = {
+          ...currentBenchmark.roveBoard,
+          properties: changedProps(currentBenchmark.roveBoard.properties, prev?.roveBoard?.properties),
+        };
       }
       setSaveStatus("saving");
       fetch("/api/session", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: currentRows, opex_pct: currentOpex, reward_pct: currentReward, benchmark: currentBenchmark }),
+        body: JSON.stringify({
+          rows: currentRows,
+          opex_pct: currentOpex,
+          reward_pct: currentReward,
+          benchmark: delta,
+          deletedUids: deletedUidsRef.current,
+        }),
       })
         .then(async (r) => {
           const body = await r.json().catch(() => ({}));
           if (!r.ok) { setSaveStatus("error"); return; }
+          deletedUidsRef.current = []; // deletions acknowledged by the server
+          lastSavedRef.current = currentBenchmark; // baseline for the next diff
           // A warning means part of the data (e.g. benchmark) was NOT persisted.
           if (body?.warning) { setSaveWarning(body.warning); setSaveStatus("error"); }
           else { setSaveWarning(null); setSaveStatus("saved"); }
@@ -378,7 +400,7 @@ export default function Page() {
                   const bm = parsed.benchmark ?? parsed; // accept full backup or bare benchmark
                   const norm = normalizeBenchmark(bm);
                   if (!norm.properties.length) { alert("No properties found in that file."); return; }
-                  maxPropsRef.current = 0; // allow the incoming count to set a new baseline
+                  lastSavedRef.current = null; // force a full save of the imported data
                   setBenchmark(norm);
                   if (Array.isArray(parsed.rows) && parsed.rows.length) {
                     setRows(parsed.rows.map((r: Partial<Row>) => ({ ...blankRow(), ...r, id: nextId++ })));
@@ -441,6 +463,7 @@ export default function Page() {
           setBenchmark={(fn) => setBenchmark((b) => ({ ...b, ...fn(b) }))}
           opexPct={opexPct}
           globalReward={rewardPct}
+          onDeleteProperty={(uid) => deletedUidsRef.current.push(uid)}
         />
       )}
 
@@ -458,6 +481,7 @@ export default function Page() {
           }
           opexPct={opexPct}
           globalReward={rewardPct}
+          onDeleteProperty={(uid) => deletedUidsRef.current.push(uid)}
         />
       )}
 

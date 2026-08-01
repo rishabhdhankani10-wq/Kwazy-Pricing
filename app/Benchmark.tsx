@@ -41,13 +41,19 @@ export type BSlot = {
 };
 
 export type BProperty = {
-  id: number;
+  id: number;                       // in-memory only (React keys)
+  uid: string;                      // STABLE id, persisted — used to merge saves
   city: string;
   name: string;
   otas: string[];                   // per-property OTA set
   hidden: string[];                 // OTAs excluded from the result but data kept
   slots: BSlot[];
 };
+
+// Stable, collision-free id for a property. Persisted so concurrent editors can
+// merge instead of overwriting each other.
+export const newUid = () =>
+  "p_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 9);
 
 export type Board = {
   slots: SlotDef[];                 // time slots (per board)
@@ -95,6 +101,7 @@ const blankSlot = (slotKey: string, otas: string[]): BSlot => ({
 
 const blankProperty = (city: string, slots: SlotDef[], otas: string[] = DEFAULT_OTAS, name = ""): BProperty => ({
   id: bId++,
+  uid: newUid(),
   city,
   name,
   otas: [...otas],
@@ -124,6 +131,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
       const oldSlots = (p.slots as Record<string, unknown>[]) ?? [];
       return {
         id: bId++,
+        uid: String(p.uid ?? newUid()),
         city: String(p.city ?? ""),
         name: String(p.name ?? ""),
         otas: [...otas],
@@ -155,6 +163,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
     const otas = (p as BProperty).otas?.length ? (p as BProperty).otas : globalOtas;
     return {
       id: bId++,
+      uid: p.uid ?? newUid(),
       city: p.city,
       name: p.name,
       otas: [...otas],
@@ -175,6 +184,7 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
     const otas = p.otas?.length ? p.otas : [...DEFAULT_OTAS];
     return {
       id: bId++,
+      uid: p.uid ?? newUid(),
       city: p.city,
       name: p.name,
       otas: [...otas],
@@ -281,6 +291,7 @@ export default function Benchmark({
   roveMode = false,
   title = "Rate Benchmark",
   subtitle = "Same properties, sampled across a lead-time × season grid. Median markup you can add per property, averaged across cities.",
+  onDeleteProperty,
 }: {
   benchmark: Board;
   setBenchmark: (updater: (b: Board) => Board) => void;
@@ -289,6 +300,7 @@ export default function Benchmark({
   roveMode?: boolean;
   title?: string;
   subtitle?: string;
+  onDeleteProperty?: (uid: string) => void;
 }) {
   const { slots, properties } = benchmark;
   const usdRateNum = num(benchmark.usdRate ?? DEFAULT_USD_RATE) || Number(DEFAULT_USD_RATE);
@@ -336,7 +348,11 @@ export default function Benchmark({
     setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(city, b.slots)] }));
 
   const removeProperty = (propId: number) =>
-    setBenchmark((b) => ({ ...b, properties: b.properties.filter((p) => p.id !== propId) }));
+    setBenchmark((b) => {
+      const gone = b.properties.find((p) => p.id === propId);
+      if (gone?.uid) onDeleteProperty?.(gone.uid);
+      return { ...b, properties: b.properties.filter((p) => p.id !== propId) };
+    });
 
   // Per-property OTA add/remove
   const addOta = (propId: number, name: string) => {

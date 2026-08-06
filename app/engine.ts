@@ -72,11 +72,15 @@ export function compute(inputs: Inputs): Result {
   const tboBase = tboGross / (1 + tboSlab.rate);
   const tboEmbeddedGst = tboGross - tboBase;
 
-  // ITC on the PURCHASE depends on how the PURCHASE was taxed — NOT on how we
-  // resell it. GST 2.0: 5% hotel slab carries NO ITC; only the 18% slab does.
-  // So a room bought at <=7,500/night (5%) leaves its GST stuck in our cost,
-  // even if we later sell it above 7,500.
-  const itcApplies = tboSlab.itc;
+  // ITC requires BOTH legs to sit in the 18% regime:
+  //  - the purchase must have been taxed at 18% (a 5% purchase carries no credit), AND
+  //  - the onward supply must also be 18%. Selling in the 5% bracket means you are
+  //    on the no-ITC scheme, so the input credit is denied even if you paid 18%.
+  // Without the second condition, a room bought just above 7,500 and sold just
+  // below it would reclaim 18% while charging 5% — a phantom profit on a room
+  // that is actually being sold below cost.
+  const sellSlabForItc = slabForPrice(cheapestCompetitor ?? tboGross);
+  const itcApplies = tboSlab.itc && sellSlabForItc.itc;
   const tboRecoverableGst = itcApplies ? tboEmbeddedGst : 0;
 
   // True cost basis: if the input GST is creditable, our cost is the base;

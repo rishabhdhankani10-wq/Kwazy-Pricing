@@ -344,6 +344,33 @@ export default function Benchmark({
   const updateProp = (propId: number, field: "name" | "city", value: string) =>
     setBenchmark((b) => mapProp(b, propId, (p) => ({ ...p, [field]: value })));
 
+  // Copy this property's check-in/check-out dates onto the next property in the
+  // same city. Dates only — prices are never touched.
+  const copyDatesDown = (propId: number) =>
+    setBenchmark((b) => {
+      const src = b.properties.find((p) => p.id === propId);
+      if (!src) return b;
+      const inCity = b.properties.filter((p) => p.city === src.city);
+      const idx = inCity.findIndex((p) => p.id === propId);
+      const target = inCity[idx + 1];
+      if (!target) return b;
+      const dates = new Map(src.slots.map((s) => [s.slot, { ci: s.checkIn, co: s.checkOut }]));
+      return {
+        ...b,
+        properties: b.properties.map((p) =>
+          p.id !== target.id
+            ? p
+            : {
+                ...p,
+                slots: p.slots.map((s) => {
+                  const d = dates.get(s.slot);
+                  return d ? { ...s, checkIn: d.ci, checkOut: d.co } : s;
+                }),
+              }
+        ),
+      };
+    });
+
   const addProperty = (city: string) =>
     setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(city, b.slots)] }));
 
@@ -575,6 +602,21 @@ export default function Benchmark({
                     <span className="agent">&nbsp;/&nbsp;</span>
                     <strong className="agent">{analysis.perPropertyAvgA.get(p.id) != null ? pct(analysis.perPropertyAvgA.get(p.id)!) : "—"}</strong>
                   </span>
+                  {(() => {
+                    const inCity = propsByCity(city);
+                    const idx = inCity.findIndex((x) => x.id === p.id);
+                    const next = inCity[idx + 1];
+                    if (!next) return null;
+                    return (
+                      <button
+                        className="copy-dates"
+                        onClick={() => copyDatesDown(p.id)}
+                        title={`Copy these dates to "${next.name || "the property below"}"`}
+                      >
+                        ↓ Copy dates
+                      </button>
+                    );
+                  })()}
                   <button className="bprop-rm" onClick={() => removeProperty(p.id)} aria-label="Remove property">&times;</button>
                 </div>
 

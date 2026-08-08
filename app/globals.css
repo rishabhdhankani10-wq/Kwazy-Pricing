@@ -657,6 +657,23 @@ html, body {
 .bprop-name:focus { border-bottom-color: var(--ink); }
 .bprop-median { font-size: 11.5px; color: var(--ink-soft); }
 .bprop-median strong { font-family: 'JetBrains Mono', monospace; color: var(--ink); font-size: 14px; }
+.copy-dates {
+  margin-left: auto;
+  border: 1px solid var(--line-2);
+  background: var(--white);
+  border-radius: 4px;
+  padding: 3px 9px;
+  font-family: 'Inter', sans-serif;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s, color .12s;
+}
+.copy-dates:hover { background: var(--ink); color: var(--paper); }
+.copy-dates + .bprop-rm { margin-left: 8px; }
+
 .bprop-rm {
   margin-left: auto; border: none; background: transparent; cursor: pointer;
   color: var(--line-2); font-size: 18px; line-height: 1;

@@ -1200,3 +1200,54 @@ html, body {
   .tgrid { grid-template-columns: 1fr 1fr; }
   .masthead h1 { font-size: 24px; }
 }
+
+/* City tabs (within a board) */
+.city-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.city-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line-2);
+  background: var(--white);
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.city-tab:hover { border-color: var(--ink); color: var(--ink); }
+.city-tab.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.city-tab-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  border-radius: 8px;
+  padding: 1px 6px;
+}
+.city-tab.on .city-tab-count { background: rgba(255,255,255,0.22); color: var(--paper); }
+.city-tab-add {
+  border: 1px dashed var(--line-2);
+  background: transparent;
+  border-radius: 14px;
+  padding: 5px 12px;
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  color: var(--ink);
+  outline: none;
+  width: 110px;
+  transition: border-color .12s;
+}
+.city-tab-add:focus { border-color: var(--ink); border-style: solid; }

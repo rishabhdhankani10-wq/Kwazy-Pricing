@@ -470,6 +470,7 @@ export default function Page() {
       {view === "rove" && (
         <Benchmark
           roveMode
+          cityTabs
           title="Rove Watch"
           subtitle="Rove's headline price minus their return is their real price. Headroom shows whether you can match it and still break even."
           benchmark={benchmark.roveBoard ?? { slots: DEFAULT_SLOTS, properties: [] }}

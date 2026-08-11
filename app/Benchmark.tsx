@@ -292,6 +292,7 @@ export default function Benchmark({
   title = "Rate Benchmark",
   subtitle = "Same properties, sampled across a lead-time × season grid. Median markup you can add per property, averaged across cities.",
   onDeleteProperty,
+  cityTabs = false,
 }: {
   benchmark: Board;
   setBenchmark: (updater: (b: Board) => Board) => void;
@@ -301,11 +302,14 @@ export default function Benchmark({
   title?: string;
   subtitle?: string;
   onDeleteProperty?: (uid: string) => void;
+  cityTabs?: boolean;
 }) {
   const { slots, properties } = benchmark;
   const usdRateNum = num(benchmark.usdRate ?? DEFAULT_USD_RATE) || Number(DEFAULT_USD_RATE);
   const [newCity, setNewCity] = useState("");
   const [newSlot, setNewSlot] = useState("");
+  const [activeCity, setActiveCity] = useState<string>("__all__");
+  const [tabCity, setTabCity] = useState("");
 
   const mapProp = (b: Board, propId: number, fn: (p: BProperty) => BProperty) => ({
     ...b,
@@ -562,7 +566,48 @@ export default function Benchmark({
         <button className="bcfg-add" onClick={addSlot}>+ Slot</button>
       </div>
 
-      {cities.map((city) => (
+      {cityTabs && (
+        <div className="city-tabs">
+          <button
+            className={"city-tab" + (activeCity === "__all__" ? " on" : "")}
+            onClick={() => setActiveCity("__all__")}
+          >
+            All
+            <span className="city-tab-count">{properties.length}</span>
+          </button>
+          {cities.map((c) => {
+            const n = properties.filter((p) => p.city === c).length;
+            return (
+              <button
+                key={c}
+                className={"city-tab" + (activeCity === c ? " on" : "")}
+                onClick={() => setActiveCity(c)}
+              >
+                {c}
+                <span className="city-tab-count">{n}</span>
+              </button>
+            );
+          })}
+          <input
+            className="city-tab-add"
+            placeholder="+ new city"
+            value={tabCity}
+            onChange={(e) => setTabCity(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              const name = tabCity.trim();
+              if (!name) return;
+              if (!cities.includes(name)) {
+                setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(name, b.slots)] }));
+              }
+              setActiveCity(name);
+              setTabCity("");
+            }}
+          />
+        </div>
+      )}
+
+      {(cityTabs && activeCity !== "__all__" ? cities.filter((c) => c === activeCity) : cities).map((city) => (
         <div className="bench-city" key={city}>
           <div className="bc-head">
             <span className="bc-name">{city}</span>

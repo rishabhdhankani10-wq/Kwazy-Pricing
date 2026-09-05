@@ -1307,3 +1307,19 @@ html, body {
 .src-best { background: #f0ede5; font-weight: 700; }
 .src-chip { margin-right: 10px; font-size: 11.5px; color: var(--ink-soft); }
 .src-chip strong { font-family: 'JetBrains Mono', monospace; color: var(--ink); font-size: 12.5px; }
+.src-chip-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-soft); font-weight: 700; margin-right: 8px;
+}
+.src-chip.best strong { color: var(--green); }
+.src-chip.best { position: relative; }
+.src-chip.best::after {
+  content: "best"; font-size: 8.5px; font-weight: 700; color: var(--green);
+  text-transform: uppercase; letter-spacing: .05em; margin-left: 4px;
+}
+.src-chip-sub {
+  font-style: normal; font-size: 8.5px; font-weight: 600;
+  color: var(--ink-soft); text-transform: uppercase; letter-spacing: .04em;
+  margin: 0 6px 0 2px;
+}
+.src-chip { display: inline-flex; align-items: baseline; margin-right: 14px; }

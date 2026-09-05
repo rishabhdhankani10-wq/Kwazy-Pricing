@@ -602,20 +602,25 @@ export default function Benchmark({
   // ── Rove Watch: per-source stats (no tax; markup vs cost, margin vs MMT) ──
   const roveStats = useMemo(() => {
     if (!roveMode) return null;
-    const sourceNames = ["TBO", ...[...new Set(properties.flatMap((p) => costSources(p)))]];
+    // Scope: the selected city tab, or every city when "All" is chosen.
+    const scoped = activeCity === "__all__" ? properties : properties.filter((p) => p.city === activeCity);
+    const sourceNames = ["TBO", ...[...new Set(scoped.flatMap((p) => costSources(p)))]];
     const bucket: Record<string, { mk: number[]; mg: number[] }> = {};
     for (const s of sourceNames) bucket[s] = { mk: [], mg: [] };
+
+    // Per-property medians for every source (also used by the property header).
+    const perProp = new Map<number, Record<string, { mk: number | null; mg: number | null }>>();
+    // "Best of each": per PROPERTY pick its strongest source, then aggregate
+    // those winners across the city — not row-by-row.
     const bestMk: number[] = [];
     const bestMg: number[] = [];
-    // per property -> per source medians (for the property header)
-    const perProp = new Map<number, Record<string, number | null>>();
 
-    for (const p of properties) {
+    for (const p of scoped) {
       const srcs = ["TBO", ...costSources(p)];
-      const local: Record<string, number[]> = {};
-      for (const sName of srcs) local[sName] = [];
+      const localMk: Record<string, number[]> = {};
+      const localMg: Record<string, number[]> = {};
+      for (const sName of srcs) { localMk[sName] = []; localMg[sName] = []; }
       for (const slot of p.slots) {
-        let bMk: number | null = null, bMg: number | null = null;
         for (const sName of srcs) {
           const raw = sName === "TBO" ? slot.tbo : (slot.comps[sName] ?? "");
           const r = sourceVsBenchmark(slot, raw);
@@ -623,17 +628,23 @@ export default function Benchmark({
           bucket[sName] ??= { mk: [], mg: [] };
           bucket[sName].mk.push(r.markup);
           bucket[sName].mg.push(r.margin);
-          local[sName].push(r.markup);
-          if (bMk === null || r.markup > bMk) { bMk = r.markup; bMg = r.margin; }
+          localMk[sName].push(r.markup);
+          localMg[sName].push(r.margin);
         }
-        if (bMk !== null) { bestMk.push(bMk); bestMg.push(bMg!); }
       }
-      const rec: Record<string, number | null> = {};
-      for (const sName of srcs) rec[sName] = median(local[sName]);
+      const rec: Record<string, { mk: number | null; mg: number | null }> = {};
+      let winMk: number | null = null, winMg: number | null = null;
+      for (const sName of srcs) {
+        const m = median(localMk[sName]);
+        const g = median(localMg[sName]);
+        rec[sName] = { mk: m, mg: g };
+        if (m != null && (winMk === null || m > winMk)) { winMk = m; winMg = g; }
+      }
       perProp.set(p.id, rec);
+      if (winMk !== null) { bestMk.push(winMk); if (winMg != null) bestMg.push(winMg); }
     }
-    return { sourceNames, bucket, bestMk, bestMg, perProp };
-  }, [roveMode, properties]);
+    return { sourceNames, bucket, bestMk, bestMg, perProp, scope: activeCity };
+  }, [roveMode, properties, activeCity]);
 
   return (
     <div className="bench">
@@ -645,7 +656,7 @@ export default function Benchmark({
         {roveMode && roveStats ? (
           <div className="src-summary">
             <div className="src-row src-head">
-              <span>Source → {BENCHMARK_OTA}</span>
+              <span>{activeCity === "__all__" ? "All cities" : activeCity} · source → {BENCHMARK_OTA}</span>
               <span>Markup med</span>
               <span>Markup avg</span>
               <span>Margin med</span>
@@ -771,6 +782,7 @@ export default function Benchmark({
         <div className="bench-city" key={city}>
           <div className="bc-head">
             <span className="bc-name">{city}</span>
+            {!roveMode && (
             <span className="bc-avg">
               med&nbsp;<strong>{analysis.perCity.get(city) != null ? pct(analysis.perCity.get(city)!) : "—"}</strong>
               &nbsp;·&nbsp;avg&nbsp;<strong>{analysis.perCityAvg.get(city) != null ? pct(analysis.perCityAvg.get(city)!) : "—"}</strong>
@@ -779,6 +791,7 @@ export default function Benchmark({
               <span className="agent">&nbsp;/&nbsp;</span>
               <strong className="agent">{analysis.perCityAvgA.get(city) != null ? pct(analysis.perCityAvgA.get(city)!) : "—"}</strong>
             </span>
+            )}
             <button className="bc-add" onClick={() => addProperty(city)}>+ property</button>
           </div>
 
@@ -819,11 +832,20 @@ export default function Benchmark({
                   />
                   {roveMode && roveStats ? (
                     <span className="bprop-median">
+                      <span className="src-chip-label">vs {BENCHMARK_OTA} (median):</span>
                       {["TBO", ...src].map((o) => {
                         const v = roveStats.perProp.get(p.id)?.[o];
+                        const best = ["TBO", ...src]
+                          .map((x) => roveStats.perProp.get(p.id)?.[x]?.mk)
+                          .filter((x): x is number => x != null);
+                        const isBest = v?.mk != null && best.length > 0 && v.mk === Math.max(...best);
                         return (
-                          <span key={o} className="src-chip">
-                            {o}&nbsp;<strong>{v != null ? pct(v) : "—"}</strong>
+                          <span key={o} className={"src-chip" + (isBest ? " best" : "")}>
+                            {o}&nbsp;
+                            <strong>{v?.mk != null ? pct(v.mk) : "—"}</strong>
+                            <em className="src-chip-sub">mk</em>
+                            <strong className="agent">{v?.mg != null ? pct(v.mg) : "—"}</strong>
+                            <em className="src-chip-sub">margin</em>
                           </span>
                         );
                       })}

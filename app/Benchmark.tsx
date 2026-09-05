@@ -55,11 +55,17 @@ export type BProperty = {
 export const newUid = () =>
   "p_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 9);
 
+export type CityFlags = { hideRove?: boolean; hideReturn?: boolean };
+
 export type Board = {
   slots: SlotDef[];                 // time slots (per board)
   properties: BProperty[];
   usdRate?: string;                 // USD→INR rate (Rove board only)
+  cityFlags?: Record<string, CityFlags>; // city-wide column toggles (Rove board)
 };
+
+// The retail benchmark every cost source is measured against.
+export const BENCHMARK_OTA = "MMT";
 
 export const DEFAULT_USD_RATE = "97";
 
@@ -202,7 +208,12 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
   return {
     slots,
     properties,
-    roveBoard: { slots: rSlots, properties: rProps, usdRate: rb?.usdRate ?? DEFAULT_USD_RATE },
+    roveBoard: {
+      slots: rSlots,
+      properties: rProps,
+      usdRate: rb?.usdRate ?? DEFAULT_USD_RATE,
+      cityFlags: rb?.cityFlags ?? {},
+    },
   };
 }
 
@@ -276,11 +287,48 @@ export function roveCalcSlot(
   };
 }
 
-const gridCols = (n: number, rove: boolean) =>
-  rove
-    ? `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.9fr 0.7fr 0.8fr 0.8fr 0.8fr`
-    : `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
-const gridMinW = (n: number, rove: boolean) => (rove ? 800 : 630) + n * 105;
+// ── Source-vs-benchmark economics (Rove Watch) ──────────────────────────────
+// Every cost source (TBO, TripJack, anything you add) is compared against MMT,
+// which is the retail benchmark. Same engine as Rate Benchmark: per-night, GST
+// slabs, ITC only when BOTH legs sit above 7,500/night.
+export function sourceVsBenchmark(
+  slot: BSlot,
+  costRaw: string,
+  opexPct: number,
+  globalReward: number
+): { markup: number; agent: number } | null {
+  const n = slotNights(slot.checkIn, slot.checkOut);
+  const cost = num(costRaw) / n;
+  const sell = num(slot.comps[BENCHMARK_OTA] ?? "") / n;
+  if (!cost || !sell) return null;
+  const res = compute({
+    tboGross: cost,
+    competitors: [sell],
+    opexPct: opexPct / 100,
+    rewardPct: (num(slot.reward) || globalReward) / 100,
+  });
+  return { markup: res.markupPct, agent: ((sell - cost) / 1.18) / cost };
+}
+
+// Cost sources for a property, in display order: TBO first, then any OTA the
+// user added, with the benchmark (MMT) excluded — it's the sell price, not a cost.
+export const costSources = (p: BProperty) =>
+  visibleOtas(p).filter((o) => o !== BENCHMARK_OTA);
+
+// Rove layout: slot | dates | TBO | [sources] | MMT | [Rove$] | [Return%]
+//              then 2 result columns (markup + agent) for TBO and each source.
+const roveCols = (nSrc: number, showRove: boolean, showRet: boolean) => {
+  const cols = ["1.25fr", "1.2fr", "0.85fr", ...Array(nSrc).fill("0.85fr"), "0.85fr"];
+  if (showRove) cols.push("0.85fr");
+  if (showRet) cols.push("0.7fr");
+  return [...cols, ...Array((nSrc + 1) * 2).fill("0.8fr")].join(" ");
+};
+const roveMinW = (nSrc: number, showRove: boolean, showRet: boolean) =>
+  430 + (nSrc + 1) * 95 + (showRove ? 95 : 0) + (showRet ? 75 : 0) + (nSrc + 1) * 2 * 86;
+
+const gridCols = (n: number) =>
+  `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
+const gridMinW = (n: number) => 630 + n * 105;
 
 // ── Component ───────────────────────────────────────────────────────────────
 export default function Benchmark({
@@ -373,6 +421,54 @@ export default function Benchmark({
               }
         ),
       };
+    });
+
+  // ── City-wide master controls ─────────────────────────────────────────────
+  // Add / hide an OTA across every property in a city at once.
+  const addOtaCity = (city: string, name: string) => {
+    const nm = name.trim();
+    if (!nm) return;
+    setBenchmark((b) => ({
+      ...b,
+      properties: b.properties.map((p) =>
+        p.city !== city || p.otas.includes(nm)
+          ? p
+          : {
+              ...p,
+              otas: [...p.otas, nm],
+              hidden: (p.hidden ?? []).filter((h) => h !== nm),
+              slots: p.slots.map((s) => ({ ...s, comps: { ...s.comps, [nm]: "" } })),
+            }
+      ),
+    }));
+  };
+
+  const toggleOtaCity = (city: string, name: string) =>
+    setBenchmark((b) => {
+      const inCity = b.properties.filter((p) => p.city === city && p.otas.includes(name));
+      // If it's visible anywhere in the city, hide it everywhere; otherwise show it.
+      const anyVisible = inCity.some((p) => !(p.hidden ?? []).includes(name));
+      return {
+        ...b,
+        properties: b.properties.map((p) => {
+          if (p.city !== city || !p.otas.includes(name)) return p;
+          const hidden = p.hidden ?? [];
+          return {
+            ...p,
+            hidden: anyVisible
+              ? hidden.includes(name) ? hidden : [...hidden, name]
+              : hidden.filter((h) => h !== name),
+          };
+        }),
+      };
+    });
+
+  const cityFlag = (city: string): CityFlags => (benchmark.cityFlags ?? {})[city] ?? {};
+  const toggleCityFlag = (city: string, key: keyof CityFlags) =>
+    setBenchmark((b) => {
+      const cf = { ...(b.cityFlags ?? {}) };
+      cf[city] = { ...(cf[city] ?? {}), [key]: !(cf[city] ?? {})[key] };
+      return { ...b, cityFlags: cf };
     });
 
   const addProperty = (city: string) =>
@@ -622,14 +718,32 @@ export default function Benchmark({
             <button className="bc-add" onClick={() => addProperty(city)}>+ property</button>
           </div>
 
+          {roveMode && (
+            <CityMaster
+              city={city}
+              otas={[...new Set(propsByCity(city).flatMap((p) => p.otas))].filter((o) => o !== BENCHMARK_OTA)}
+              hiddenEverywhere={(o) =>
+                propsByCity(city).filter((p) => p.otas.includes(o)).every((p) => (p.hidden ?? []).includes(o))
+              }
+              flags={cityFlag(city)}
+              onAdd={(nm) => addOtaCity(city, nm)}
+              onToggle={(nm) => toggleOtaCity(city, nm)}
+              onFlag={(k) => toggleCityFlag(city, k)}
+            />
+          )}
+
           {propsByCity(city).length === 0 && (
             <p className="bc-empty">No properties yet — add one to start sampling.</p>
           )}
 
           {propsByCity(city).map((p) => {
             const vis = visibleOtas(p);
-            const cols = gridCols(vis.length, roveMode);
-            const minW = gridMinW(vis.length, roveMode);
+            const src = costSources(p);                       // TripJack, etc. (not MMT)
+            const cf = cityFlag(city);
+            const showRove = roveMode && !cf.hideRove;
+            const showRet = roveMode && !cf.hideReturn;
+            const cols = roveMode ? roveCols(src.length, showRove, showRet) : gridCols(vis.length);
+            const minW = roveMode ? roveMinW(src.length, showRove, showRet) : gridMinW(vis.length);
             return (
               <div className="bprop" key={p.id}>
                 <div className="bprop-head">
@@ -673,18 +787,25 @@ export default function Benchmark({
                     <span>Season slot</span>
                     <span>Dates</span>
                     <span>TBO</span>
-                    {vis.map((o) => (
-                      <span key={o}>{o}</span>
-                    ))}
                     {roveMode ? (
                       <>
-                        <span>Rove ($)</span>
-                        <span>Return%</span>
-                        <span>Markup</span>
-                        <span>Agent</span>
-                        <span>Rove mk</span>
+                        {src.map((o) => (
+                          <span key={o}>{o}</span>
+                        ))}
+                        <span className="bench-col">{BENCHMARK_OTA}</span>
+                        {showRove && <span>Rove ($)</span>}
+                        {showRet && <span>Return%</span>}
+                        {["TBO", ...src].map((o) => (
+                          <span key={"mk" + o}>{o}→{BENCHMARK_OTA}<br />mk</span>
+                        ))}
+                        {["TBO", ...src].map((o) => (
+                          <span key={"ag" + o} className="agent">{o}→{BENCHMARK_OTA}<br />agent</span>
+                        ))}
                       </>
                     ) : (
+                      vis.map((o) => <span key={o}>{o}</span>)
+                    )}
+                    {roveMode ? null : (
                       <>
                         <span>Reward%</span>
                         <span>Incl.</span>
@@ -718,34 +839,48 @@ export default function Benchmark({
                           onChange={(f, t) => updateSlotDates(p.id, meta.key, f, t)}
                         />
                         <BInput value={s.tbo} onChange={(v) => updateSlot(p.id, meta.key, "tbo", v)} />
-                        {vis.map((o) => (
-                          <BInput key={o} value={s.comps[o] ?? ""} onChange={(v) => updateComp(p.id, meta.key, o, v)} />
-                        ))}
                         {roveMode ? (
                           <>
-                            <span className="rove-usd">
-                              <BInput value={s.roveP ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveP", v)} />
-                              {num(s.roveP ?? "") > 0 && (
-                                <em className="rove-inr">= {fmt(num(s.roveP ?? "") * usdRateNum)}</em>
-                              )}
-                            </span>
-                            <BInput value={s.roveReturn ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveReturn", v)} placeholder="0" />
-                            <span className={"bslot-mk" + (mk != null && mk < 0 ? " neg" : mk != null ? " pos" : "")}>
-                              {mk != null ? pct(mk) : "—"}
-                            </span>
-                            <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
-                              {mkA != null ? pct(mkA) : "—"}
-                            </span>
-                            {(() => {
-                              const rv = roveCalcSlot(s, p.otas, p.hidden ?? [], opexPct, usdRateNum)?.roveVsOta;
+                            {src.map((o) => (
+                              <BInput key={o} value={s.comps[o] ?? ""} onChange={(v) => updateComp(p.id, meta.key, o, v)} />
+                            ))}
+                            <BInput
+                              value={s.comps[BENCHMARK_OTA] ?? ""}
+                              onChange={(v) => updateComp(p.id, meta.key, BENCHMARK_OTA, v)}
+                            />
+                            {showRove && (
+                              <span className="rove-usd">
+                                <BInput value={s.roveP ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveP", v)} />
+                                {num(s.roveP ?? "") > 0 && (
+                                  <em className="rove-inr">= {fmt(num(s.roveP ?? "") * usdRateNum)}</em>
+                                )}
+                              </span>
+                            )}
+                            {showRet && (
+                              <BInput value={s.roveReturn ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveReturn", v)} placeholder="0" />
+                            )}
+                            {["TBO", ...src].map((o) => {
+                              const r = sourceVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), opexPct, globalReward);
                               return (
-                                <span className={"bslot-mk " + (rv == null ? "" : rv >= 0 ? "pos" : "neg")}>
-                                  {rv != null ? pct(rv) : "—"}
+                                <span key={"mk" + o} className={"bslot-mk" + (r ? (r.markup < 0 ? " neg" : " pos") : "")}>
+                                  {r ? pct(r.markup) : "—"}
                                 </span>
                               );
-                            })()}
+                            })}
+                            {["TBO", ...src].map((o) => {
+                              const r = sourceVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), opexPct, globalReward);
+                              return (
+                                <span key={"ag" + o} className={"bslot-mk agent" + (r && r.agent < 0 ? " neg" : "")}>
+                                  {r ? pct(r.agent) : "—"}
+                                </span>
+                              );
+                            })}
                           </>
                         ) : (
+                          <>
+                          {vis.map((o) => (
+                            <BInput key={o} value={s.comps[o] ?? ""} onChange={(v) => updateComp(p.id, meta.key, o, v)} />
+                          ))}
                           <>
                             <BInput value={s.reward} onChange={(v) => updateSlot(p.id, meta.key, "reward", v)} placeholder={String(globalReward)} />
                             <span className="bslot-incl">
@@ -764,6 +899,7 @@ export default function Benchmark({
                             <span className={"bslot-mk agent" + (mkA != null && mkA < 0 ? " neg" : "")}>
                               {mkA != null ? pct(mkA) : "—"}
                             </span>
+                          </>
                           </>
                         )}
                       </div>
@@ -786,6 +922,60 @@ export default function Benchmark({
         />
         <button className="bench-addcity-btn" onClick={addCity}>+ Add city</button>
       </div>
+    </div>
+  );
+}
+
+// City-wide master: add/hide OTAs across every property in the city, and drop
+// the Rove / Return% columns for the whole city at once.
+function CityMaster({
+  city, otas, hiddenEverywhere, flags, onAdd, onToggle, onFlag,
+}: {
+  city: string;
+  otas: string[];
+  hiddenEverywhere: (o: string) => boolean;
+  flags: CityFlags;
+  onAdd: (n: string) => void;
+  onToggle: (n: string) => void;
+  onFlag: (k: keyof CityFlags) => void;
+}) {
+  const [val, setVal] = useState("");
+  const add = () => { onAdd(val); setVal(""); };
+  return (
+    <div className="bench-config city-master">
+      <span className="bcfg-label">All of {city}</span>
+      {otas.map((o) => {
+        const off = hiddenEverywhere(o);
+        return (
+          <span className={"bcfg-chip" + (off ? " ota-hidden" : "")} key={o}>
+            {o}
+            <button className="bcfg-x" onClick={() => onToggle(o)} title={off ? "Show across this city" : "Hide across this city"}>
+              {off ? "+" : "−"}
+            </button>
+          </span>
+        );
+      })}
+      <input
+        className="bcfg-in"
+        placeholder="Add OTA to whole city…"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && add()}
+      />
+      <button className="bcfg-add" onClick={add}>+ OTA</button>
+      <span className="master-sep" />
+      <button
+        className={"master-toggle" + (flags.hideRove ? " off" : "")}
+        onClick={() => onFlag("hideRove")}
+      >
+        {flags.hideRove ? "+ Rove" : "− Rove"}
+      </button>
+      <button
+        className={"master-toggle" + (flags.hideReturn ? " off" : "")}
+        onClick={() => onFlag("hideReturn")}
+      >
+        {flags.hideReturn ? "+ Return%" : "− Return%"}
+      </button>
     </div>
   );
 }

@@ -1323,3 +1323,4 @@ html, body {
   margin: 0 6px 0 2px;
 }
 .src-chip { display: inline-flex; align-items: baseline; margin-right: 14px; }
+.src-scope { font-style: normal; font-size: 8.5px; font-weight: 600; opacity: .7; letter-spacing: .04em; }

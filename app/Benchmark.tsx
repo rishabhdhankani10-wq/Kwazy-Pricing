@@ -625,9 +625,6 @@ export default function Benchmark({
           const raw = sName === "TBO" ? slot.tbo : (slot.comps[sName] ?? "");
           const r = sourceVsBenchmark(slot, raw);
           if (!r) continue;
-          bucket[sName] ??= { mk: [], mg: [] };
-          bucket[sName].mk.push(r.markup);
-          bucket[sName].mg.push(r.margin);
           localMk[sName].push(r.markup);
           localMg[sName].push(r.margin);
         }
@@ -638,6 +635,13 @@ export default function Benchmark({
         const m = median(localMk[sName]);
         const g = median(localMg[sName]);
         rec[sName] = { mk: m, mg: g };
+        // Every row in the summary aggregates PER PROPERTY (each hotel counted
+        // once), so the source rows and "Best of each" are directly comparable.
+        if (m != null) {
+          bucket[sName] ??= { mk: [], mg: [] };
+          bucket[sName].mk.push(m);
+          if (g != null) bucket[sName].mg.push(g);
+        }
         if (m != null && (winMk === null || m > winMk)) { winMk = m; winMg = g; }
       }
       perProp.set(p.id, rec);
@@ -656,7 +660,7 @@ export default function Benchmark({
         {roveMode && roveStats ? (
           <div className="src-summary">
             <div className="src-row src-head">
-              <span>{activeCity === "__all__" ? "All cities" : activeCity} · source → {BENCHMARK_OTA}</span>
+              <span>{activeCity === "__all__" ? "All cities" : activeCity} · source → {BENCHMARK_OTA}<br /><em className="src-scope">per property</em></span>
               <span>Markup med</span>
               <span>Markup avg</span>
               <span>Margin med</span>

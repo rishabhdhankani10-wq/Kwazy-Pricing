@@ -1324,3 +1324,6 @@ html, body {
 }
 .src-chip { display: inline-flex; align-items: baseline; margin-right: 14px; }
 .src-scope { font-style: normal; font-size: 8.5px; font-weight: 600; opacity: .7; letter-spacing: .04em; }
+.board-master { background: var(--ink); border-color: var(--ink); }
+.board-master .bcfg-label { color: var(--paper); }
+.board-master .bcfg-note { color: rgba(255,255,255,.6); }

@@ -61,7 +61,9 @@ export type Board = {
   slots: SlotDef[];                 // time slots (per board)
   properties: BProperty[];
   usdRate?: string;                 // USD→INR rate (Rove board only)
-  cityFlags?: Record<string, CityFlags>; // city-wide column toggles (Rove board)
+  cityFlags?: Record<string, CityFlags>; // legacy per-city toggles (kept for old saves)
+  hideRove?: boolean;               // board-wide: drop the Rove column everywhere
+  hideReturn?: boolean;             // board-wide: drop the Return% column everywhere
 };
 
 // The retail benchmark every cost source is measured against.
@@ -213,6 +215,8 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
       properties: rProps,
       usdRate: rb?.usdRate ?? DEFAULT_USD_RATE,
       cityFlags: rb?.cityFlags ?? {},
+      hideRove: rb?.hideRove ?? false,
+      hideReturn: rb?.hideReturn ?? false,
     },
   };
 }
@@ -460,13 +464,46 @@ export default function Benchmark({
       };
     });
 
-  const cityFlag = (city: string): CityFlags => (benchmark.cityFlags ?? {})[city] ?? {};
-  const toggleCityFlag = (city: string, key: keyof CityFlags) =>
+  // ── Board-wide (all cities) ──────────────────────────────────────────────
+  const addOtaAll = (name: string) => {
+    const nm = name.trim();
+    if (!nm) return;
+    setBenchmark((b) => ({
+      ...b,
+      properties: b.properties.map((p) =>
+        p.otas.includes(nm)
+          ? { ...p, hidden: (p.hidden ?? []).filter((h) => h !== nm) }
+          : {
+              ...p,
+              otas: [...p.otas, nm],
+              hidden: (p.hidden ?? []).filter((h) => h !== nm),
+              slots: p.slots.map((s) => ({ ...s, comps: { ...s.comps, [nm]: "" } })),
+            }
+      ),
+    }));
+  };
+
+  const toggleOtaAll = (name: string) =>
     setBenchmark((b) => {
-      const cf = { ...(b.cityFlags ?? {}) };
-      cf[city] = { ...(cf[city] ?? {}), [key]: !(cf[city] ?? {})[key] };
-      return { ...b, cityFlags: cf };
+      const anyVisible = b.properties.some((p) => p.otas.includes(name) && !(p.hidden ?? []).includes(name));
+      return {
+        ...b,
+        properties: b.properties.map((p) => {
+          if (!p.otas.includes(name)) return p;
+          const hidden = p.hidden ?? [];
+          return {
+            ...p,
+            hidden: anyVisible
+              ? hidden.includes(name) ? hidden : [...hidden, name]
+              : hidden.filter((h) => h !== name),
+          };
+        }),
+      };
     });
+
+  const toggleBoardFlag = (key: "hideRove" | "hideReturn") =>
+    setBenchmark((b) => ({ ...b, [key]: !b[key] }));
+
 
   const addProperty = (city: string) =>
     setBenchmark((b) => ({ ...b, properties: [...b.properties, blankProperty(city, b.slots)] }));
@@ -720,6 +757,20 @@ export default function Benchmark({
         </div>
       )}
 
+      {roveMode && (
+        <BoardMaster
+          otas={[...new Set(properties.flatMap((p) => p.otas))].filter((o) => o !== BENCHMARK_OTA)}
+          hiddenEverywhere={(o) =>
+            properties.filter((p) => p.otas.includes(o)).every((p) => (p.hidden ?? []).includes(o))
+          }
+          hideRove={!!benchmark.hideRove}
+          hideReturn={!!benchmark.hideReturn}
+          onAdd={addOtaAll}
+          onToggle={toggleOtaAll}
+          onFlag={toggleBoardFlag}
+        />
+      )}
+
       {/* Slot manager (global) */}
       <div className="bench-config">
         <span className="bcfg-label">Time slots</span>
@@ -806,10 +857,8 @@ export default function Benchmark({
               hiddenEverywhere={(o) =>
                 propsByCity(city).filter((p) => p.otas.includes(o)).every((p) => (p.hidden ?? []).includes(o))
               }
-              flags={cityFlag(city)}
               onAdd={(nm) => addOtaCity(city, nm)}
               onToggle={(nm) => toggleOtaCity(city, nm)}
-              onFlag={(k) => toggleCityFlag(city, k)}
             />
           )}
 
@@ -820,9 +869,8 @@ export default function Benchmark({
           {propsByCity(city).map((p) => {
             const vis = visibleOtas(p);
             const src = costSources(p);                       // TripJack, etc. (not MMT)
-            const cf = cityFlag(city);
-            const showRove = roveMode && !cf.hideRove;
-            const showRet = roveMode && !cf.hideReturn;
+            const showRove = roveMode && !benchmark.hideRove;
+            const showRet = roveMode && !benchmark.hideReturn;
             const cols = roveMode ? roveCols(src.length, showRove, showRet) : gridCols(vis.length);
             const minW = roveMode ? roveMinW(src.length, showRove, showRet) : gridMinW(vis.length);
             return (
@@ -1032,15 +1080,13 @@ export default function Benchmark({
 // City-wide master: add/hide OTAs across every property in the city, and drop
 // the Rove / Return% columns for the whole city at once.
 function CityMaster({
-  city, otas, hiddenEverywhere, flags, onAdd, onToggle, onFlag,
+  city, otas, hiddenEverywhere, onAdd, onToggle,
 }: {
   city: string;
   otas: string[];
   hiddenEverywhere: (o: string) => boolean;
-  flags: CityFlags;
   onAdd: (n: string) => void;
   onToggle: (n: string) => void;
-  onFlag: (k: keyof CityFlags) => void;
 }) {
   const [val, setVal] = useState("");
   const add = () => { onAdd(val); setVal(""); };
@@ -1066,18 +1112,52 @@ function CityMaster({
         onKeyDown={(e) => e.key === "Enter" && add()}
       />
       <button className="bcfg-add" onClick={add}>+ OTA</button>
+    </div>
+  );
+}
+
+// Board-wide master: applies to EVERY city and every property at once.
+function BoardMaster({
+  otas, hiddenEverywhere, hideRove, hideReturn, onAdd, onToggle, onFlag,
+}: {
+  otas: string[];
+  hiddenEverywhere: (o: string) => boolean;
+  hideRove: boolean;
+  hideReturn: boolean;
+  onAdd: (n: string) => void;
+  onToggle: (n: string) => void;
+  onFlag: (k: "hideRove" | "hideReturn") => void;
+}) {
+  const [val, setVal] = useState("");
+  const add = () => { onAdd(val); setVal(""); };
+  return (
+    <div className="bench-config board-master">
+      <span className="bcfg-label">All cities</span>
+      {otas.map((o) => {
+        const off = hiddenEverywhere(o);
+        return (
+          <span className={"bcfg-chip" + (off ? " ota-hidden" : "")} key={o}>
+            {o}
+            <button className="bcfg-x" onClick={() => onToggle(o)} title={off ? "Show everywhere" : "Hide everywhere"}>
+              {off ? "+" : "−"}
+            </button>
+          </span>
+        );
+      })}
+      <input
+        className="bcfg-in"
+        placeholder="Add OTA everywhere…"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && add()}
+      />
+      <button className="bcfg-add" onClick={add}>+ OTA</button>
       <span className="master-sep" />
-      <button
-        className={"master-toggle" + (flags.hideRove ? " off" : "")}
-        onClick={() => onFlag("hideRove")}
-      >
-        {flags.hideRove ? "+ Rove" : "− Rove"}
+      <button className={"master-toggle" + (hideRove ? " off" : "")} onClick={() => onFlag("hideRove")}>
+        {hideRove ? "+ Rove" : "− Rove"}
       </button>
-      <button
-        className={"master-toggle" + (flags.hideReturn ? " off" : "")}
-        onClick={() => onFlag("hideReturn")}
-      >
-        {flags.hideReturn ? "+ Return%" : "− Return%"}
+      <button className={"master-toggle" + (hideReturn ? " off" : "")} onClick={() => onFlag("hideReturn")}>
+        {hideReturn ? "+ Return%" : "− Return%"}
       </button>
     </div>
   );

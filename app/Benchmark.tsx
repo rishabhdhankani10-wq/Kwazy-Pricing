@@ -291,23 +291,20 @@ export function roveCalcSlot(
 // Every cost source (TBO, TripJack, anything you add) is compared against MMT,
 // which is the retail benchmark. Same engine as Rate Benchmark: per-night, GST
 // slabs, ITC only when BOTH legs sit above 7,500/night.
+// No GST, no ITC — just the spread between what a source costs you and what MMT
+// sells at, expressed two ways:
+//   Markup = spread / cost   (what you add on top of what you paid)
+//   Margin = spread / MMT    (what you keep out of what the customer pays)
 export function sourceVsBenchmark(
   slot: BSlot,
-  costRaw: string,
-  opexPct: number,
-  globalReward: number
-): { markup: number; agent: number } | null {
+  costRaw: string
+): { markup: number; margin: number } | null {
   const n = slotNights(slot.checkIn, slot.checkOut);
   const cost = num(costRaw) / n;
   const sell = num(slot.comps[BENCHMARK_OTA] ?? "") / n;
   if (!cost || !sell) return null;
-  const res = compute({
-    tboGross: cost,
-    competitors: [sell],
-    opexPct: opexPct / 100,
-    rewardPct: (num(slot.reward) || globalReward) / 100,
-  });
-  return { markup: res.markupPct, agent: ((sell - cost) / 1.18) / cost };
+  const spread = sell - cost;
+  return { markup: spread / cost, margin: spread / sell };
 }
 
 // Cost sources for a property, in display order: TBO first, then any OTA the
@@ -602,6 +599,42 @@ export default function Benchmark({
 
   const propsByCity = (city: string) => properties.filter((p) => p.city === city);
 
+  // ── Rove Watch: per-source stats (no tax; markup vs cost, margin vs MMT) ──
+  const roveStats = useMemo(() => {
+    if (!roveMode) return null;
+    const sourceNames = ["TBO", ...[...new Set(properties.flatMap((p) => costSources(p)))]];
+    const bucket: Record<string, { mk: number[]; mg: number[] }> = {};
+    for (const s of sourceNames) bucket[s] = { mk: [], mg: [] };
+    const bestMk: number[] = [];
+    const bestMg: number[] = [];
+    // per property -> per source medians (for the property header)
+    const perProp = new Map<number, Record<string, number | null>>();
+
+    for (const p of properties) {
+      const srcs = ["TBO", ...costSources(p)];
+      const local: Record<string, number[]> = {};
+      for (const sName of srcs) local[sName] = [];
+      for (const slot of p.slots) {
+        let bMk: number | null = null, bMg: number | null = null;
+        for (const sName of srcs) {
+          const raw = sName === "TBO" ? slot.tbo : (slot.comps[sName] ?? "");
+          const r = sourceVsBenchmark(slot, raw);
+          if (!r) continue;
+          bucket[sName] ??= { mk: [], mg: [] };
+          bucket[sName].mk.push(r.markup);
+          bucket[sName].mg.push(r.margin);
+          local[sName].push(r.markup);
+          if (bMk === null || r.markup > bMk) { bMk = r.markup; bMg = r.margin; }
+        }
+        if (bMk !== null) { bestMk.push(bMk); bestMg.push(bMg!); }
+      }
+      const rec: Record<string, number | null> = {};
+      for (const sName of srcs) rec[sName] = median(local[sName]);
+      perProp.set(p.id, rec);
+    }
+    return { sourceNames, bucket, bestMk, bestMg, perProp };
+  }, [roveMode, properties]);
+
   return (
     <div className="bench">
       <div className="bench-head">
@@ -609,6 +642,36 @@ export default function Benchmark({
           <h2>{title}</h2>
           <p className="bench-sub">{subtitle}</p>
         </div>
+        {roveMode && roveStats ? (
+          <div className="src-summary">
+            <div className="src-row src-head">
+              <span>Source → {BENCHMARK_OTA}</span>
+              <span>Markup med</span>
+              <span>Markup avg</span>
+              <span>Margin med</span>
+              <span>Margin avg</span>
+            </div>
+            {roveStats.sourceNames.map((s) => {
+              const b = roveStats.bucket[s] ?? { mk: [], mg: [] };
+              return (
+                <div className="src-row" key={s}>
+                  <span className="src-name">{s}</span>
+                  <span>{median(b.mk) != null ? pct(median(b.mk)!) : "—"}</span>
+                  <span>{mean(b.mk) != null ? pct(mean(b.mk)!) : "—"}</span>
+                  <span className="agent">{median(b.mg) != null ? pct(median(b.mg)!) : "—"}</span>
+                  <span className="agent">{mean(b.mg) != null ? pct(mean(b.mg)!) : "—"}</span>
+                </div>
+              );
+            })}
+            <div className="src-row src-best">
+              <span className="src-name">Best of each</span>
+              <span>{median(roveStats.bestMk) != null ? pct(median(roveStats.bestMk)!) : "—"}</span>
+              <span>{mean(roveStats.bestMk) != null ? pct(mean(roveStats.bestMk)!) : "—"}</span>
+              <span className="agent">{median(roveStats.bestMg) != null ? pct(median(roveStats.bestMg)!) : "—"}</span>
+              <span className="agent">{mean(roveStats.bestMg) != null ? pct(mean(roveStats.bestMg)!) : "—"}</span>
+            </div>
+          </div>
+        ) : (
         <div className="bench-overall">
           <span className="bench-overall-label">Overall markup · med / avg</span>
           <span className="bench-overall-val">
@@ -622,6 +685,7 @@ export default function Benchmark({
             {analysis.overallAvgA != null ? pct(analysis.overallAvgA) : "—"}
           </span>
         </div>
+        )}
       </div>
 
       {roveMode && (
@@ -753,6 +817,18 @@ export default function Benchmark({
                     value={p.name}
                     onChange={(e) => updateProp(p.id, "name", e.target.value)}
                   />
+                  {roveMode && roveStats ? (
+                    <span className="bprop-median">
+                      {["TBO", ...src].map((o) => {
+                        const v = roveStats.perProp.get(p.id)?.[o];
+                        return (
+                          <span key={o} className="src-chip">
+                            {o}&nbsp;<strong>{v != null ? pct(v) : "—"}</strong>
+                          </span>
+                        );
+                      })}
+                    </span>
+                  ) : (
                   <span className="bprop-median">
                     med&nbsp;<strong>{analysis.perProperty.get(p.id) != null ? pct(analysis.perProperty.get(p.id)!) : "—"}</strong>
                     &nbsp;·&nbsp;avg&nbsp;<strong>{analysis.perPropertyAvg.get(p.id) != null ? pct(analysis.perPropertyAvg.get(p.id)!) : "—"}</strong>
@@ -761,6 +837,7 @@ export default function Benchmark({
                     <span className="agent">&nbsp;/&nbsp;</span>
                     <strong className="agent">{analysis.perPropertyAvgA.get(p.id) != null ? pct(analysis.perPropertyAvgA.get(p.id)!) : "—"}</strong>
                   </span>
+                  )}
                   {(() => {
                     const inCity = propsByCity(city);
                     const idx = inCity.findIndex((x) => x.id === p.id);
@@ -799,7 +876,7 @@ export default function Benchmark({
                           <span key={"mk" + o}>{o}→{BENCHMARK_OTA}<br />mk</span>
                         ))}
                         {["TBO", ...src].map((o) => (
-                          <span key={"ag" + o} className="agent">{o}→{BENCHMARK_OTA}<br />agent</span>
+                          <span key={"mg" + o} className="agent">{o}→{BENCHMARK_OTA}<br />margin</span>
                         ))}
                       </>
                     ) : (
@@ -860,7 +937,7 @@ export default function Benchmark({
                               <BInput value={s.roveReturn ?? ""} onChange={(v) => updateSlot(p.id, meta.key, "roveReturn", v)} placeholder="0" />
                             )}
                             {["TBO", ...src].map((o) => {
-                              const r = sourceVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), opexPct, globalReward);
+                              const r = sourceVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""));
                               return (
                                 <span key={"mk" + o} className={"bslot-mk" + (r ? (r.markup < 0 ? " neg" : " pos") : "")}>
                                   {r ? pct(r.markup) : "—"}
@@ -868,10 +945,10 @@ export default function Benchmark({
                               );
                             })}
                             {["TBO", ...src].map((o) => {
-                              const r = sourceVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), opexPct, globalReward);
+                              const r = sourceVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""));
                               return (
-                                <span key={"ag" + o} className={"bslot-mk agent" + (r && r.agent < 0 ? " neg" : "")}>
-                                  {r ? pct(r.agent) : "—"}
+                                <span key={"mg" + o} className={"bslot-mk agent" + (r && r.margin < 0 ? " neg" : "")}>
+                                  {r ? pct(r.margin) : "—"}
                                 </span>
                               );
                             })}

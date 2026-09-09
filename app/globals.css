@@ -352,6 +352,12 @@ html, body {
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 16px;
+  /* Stick to the top: an unsaved-work warning is useless if it is scrolled
+     off-screen while you keep typing 40 rows down the page. */
+  position: sticky;
+  top: 0;
+  z-index: 60;
+  box-shadow: 0 2px 10px rgba(154, 45, 52, 0.18);
 }
 
 /* View nav (Desk | Benchmark) */
@@ -1327,3 +1333,33 @@ html, body {
 .board-master { background: var(--ink); border-color: var(--ink); }
 .board-master .bcfg-label { color: var(--paper); }
 .board-master .bcfg-note { color: rgba(255,255,255,.6); }
+
+/* Per-hotel source boxes: median AND average for markup + margin */
+.bprop-median.rove-boxes { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+.src-box {
+  display: inline-flex; flex-direction: column; gap: 1px;
+  border: 1px solid var(--line); border-radius: 5px;
+  padding: 4px 9px; background: var(--paper);
+}
+.src-box.best { border-color: var(--green); background: #eef5f0; }
+.src-box-name {
+  font-size: 9.5px; font-weight: 700; letter-spacing: .05em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.src-box.best .src-box-name::after {
+  content: " · best"; color: var(--green);
+}
+.src-box-line { display: inline-flex; align-items: baseline; gap: 4px; }
+.src-box-line em {
+  font-style: normal; font-size: 9.5px; font-weight: 800;
+  letter-spacing: .06em; color: var(--ink); min-width: 46px;
+}
+.src-box-line.margin em { color: var(--agent); }
+.src-box-line strong {
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 600; color: var(--ink);
+}
+.src-box-line.margin strong { color: var(--agent); }
+.src-box-line i {
+  font-style: normal; font-size: 8.5px; color: var(--ink-soft);
+  text-transform: uppercase; margin-right: 4px;
+}

@@ -171,6 +171,19 @@ export default function Page() {
     return () => window.removeEventListener("pagehide", flush);
   }, []);
 
+  // Never let a tab with unsaved work be closed silently. If the last save was
+  // refused or failed, this tab may hold the only copy of those edits.
+  useEffect(() => {
+    const guard = (e: BeforeUnloadEvent) => {
+      if (saveStatus === "error" || saveWarning) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [saveStatus, saveWarning]);
+
   // ── Load hotel history ──────────────────────────────────────────────────────
   const loadHistory = useCallback(() => {
     fetch("/api/hotels")
@@ -218,14 +231,30 @@ export default function Page() {
       })
         .then(async (r) => {
           const body = await r.json().catch(() => ({}));
-          if (!r.ok) { setSaveStatus("error"); return; }
+          if (!r.ok) {
+            // The server refused the write (unreadable current state, or a save
+            // that would have destroyed properties). Nothing was overwritten —
+            // but the work in this tab is NOT saved, so say so loudly rather
+            // than letting a small grey "error" chip go unnoticed.
+            setSaveWarning(
+              (body?.error ?? `Save refused (HTTP ${r.status}).`) +
+                " Your data on the server is untouched, but this tab's latest edits are NOT saved. Use Export to take a copy before reloading or closing."
+            );
+            setSaveStatus("error");
+            return;
+          }
           deletedUidsRef.current = []; // deletions acknowledged by the server
           lastSavedRef.current = currentBenchmark; // baseline for the next diff
           // A warning means part of the data (e.g. benchmark) was NOT persisted.
           if (body?.warning) { setSaveWarning(body.warning); setSaveStatus("error"); }
           else { setSaveWarning(null); setSaveStatus("saved"); }
         })
-        .catch(() => setSaveStatus("error"))
+        .catch(() => {
+          setSaveWarning(
+            "Could not reach the server. This tab's latest edits are NOT saved. Use Export to take a copy before reloading or closing."
+          );
+          setSaveStatus("error");
+        })
         .finally(() => setTimeout(() => setSaveStatus("idle"), 2000));
     },
     []

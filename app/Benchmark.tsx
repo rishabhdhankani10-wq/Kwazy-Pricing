@@ -646,7 +646,7 @@ export default function Benchmark({
     for (const s of sourceNames) bucket[s] = { mk: [], mg: [] };
 
     // Per-property medians for every source (also used by the property header).
-    const perProp = new Map<number, Record<string, { mk: number | null; mg: number | null }>>();
+    const perProp = new Map<number, Record<string, { mk: number | null; mg: number | null; mkAvg: number | null; mgAvg: number | null }>>();
     // "Best of each": per PROPERTY pick its strongest source, then aggregate
     // those winners across the city — not row-by-row.
     const bestMk: number[] = [];
@@ -666,12 +666,12 @@ export default function Benchmark({
           localMg[sName].push(r.margin);
         }
       }
-      const rec: Record<string, { mk: number | null; mg: number | null }> = {};
+      const rec: Record<string, { mk: number | null; mg: number | null; mkAvg: number | null; mgAvg: number | null }> = {};
       let winMk: number | null = null, winMg: number | null = null;
       for (const sName of srcs) {
         const m = median(localMk[sName]);
         const g = median(localMg[sName]);
-        rec[sName] = { mk: m, mg: g };
+        rec[sName] = { mk: m, mg: g, mkAvg: mean(localMk[sName]), mgAvg: mean(localMg[sName]) };
         // Every row in the summary aggregates PER PROPERTY (each hotel counted
         // once), so the source rows and "Best of each" are directly comparable.
         if (m != null) {
@@ -883,8 +883,7 @@ export default function Benchmark({
                     onChange={(e) => updateProp(p.id, "name", e.target.value)}
                   />
                   {roveMode && roveStats ? (
-                    <span className="bprop-median">
-                      <span className="src-chip-label">vs {BENCHMARK_OTA} (median):</span>
+                    <span className="bprop-median rove-boxes">
                       {["TBO", ...src].map((o) => {
                         const v = roveStats.perProp.get(p.id)?.[o];
                         const best = ["TBO", ...src]
@@ -892,12 +891,22 @@ export default function Benchmark({
                           .filter((x): x is number => x != null);
                         const isBest = v?.mk != null && best.length > 0 && v.mk === Math.max(...best);
                         return (
-                          <span key={o} className={"src-chip" + (isBest ? " best" : "")}>
-                            {o}&nbsp;
-                            <strong>{v?.mk != null ? pct(v.mk) : "—"}</strong>
-                            <em className="src-chip-sub">mk</em>
-                            <strong className="agent">{v?.mg != null ? pct(v.mg) : "—"}</strong>
-                            <em className="src-chip-sub">margin</em>
+                          <span key={o} className={"src-box" + (isBest ? " best" : "")}>
+                            <span className="src-box-name">{o} → {BENCHMARK_OTA}</span>
+                            <span className="src-box-line">
+                              <em>MK</em>
+                              <strong>{v?.mk != null ? pct(v.mk) : "—"}</strong>
+                              <i>med</i>
+                              <strong>{v?.mkAvg != null ? pct(v.mkAvg) : "—"}</strong>
+                              <i>avg</i>
+                            </span>
+                            <span className="src-box-line margin">
+                              <em>MARGIN</em>
+                              <strong>{v?.mg != null ? pct(v.mg) : "—"}</strong>
+                              <i>med</i>
+                              <strong>{v?.mgAvg != null ? pct(v.mgAvg) : "—"}</strong>
+                              <i>avg</i>
+                            </span>
                           </span>
                         );
                       })}

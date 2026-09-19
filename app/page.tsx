@@ -6,7 +6,7 @@ import Benchmark, { type BenchmarkData, type BProperty, seedBenchmark, normalize
 import DateRange from "./DateRange";
 
 type CostMode = "night" | "total";
-type View = "desk" | "benchmark" | "rove";
+type View = "desk" | "benchmark" | "rove" | "earn";
 
 type Row = {
   id: number;
@@ -215,6 +215,12 @@ export default function Page() {
         delta.roveBoard = {
           ...currentBenchmark.roveBoard,
           properties: changedProps(currentBenchmark.roveBoard.properties, prev?.roveBoard?.properties),
+        };
+      }
+      if (currentBenchmark.earnBoard) {
+        delta.earnBoard = {
+          ...currentBenchmark.earnBoard,
+          properties: changedProps(currentBenchmark.earnBoard.properties, prev?.earnBoard?.properties),
         };
       }
       setSaveStatus("saving");
@@ -484,6 +490,7 @@ export default function Page() {
         <button className={"view-tab" + (view === "desk" ? " on" : "")} onClick={() => setView("desk")}>Pricing Desk</button>
         <button className={"view-tab" + (view === "benchmark" ? " on" : "")} onClick={() => setView("benchmark")}>Rate Benchmark</button>
         <button className={"view-tab" + (view === "rove" ? " on" : "")} onClick={() => setView("rove")}>Rove Watch</button>
+        <button className={"view-tab" + (view === "earn" ? " on" : "")} onClick={() => setView("earn")}>Earn &amp; Redeem</button>
       </nav>
 
       {view === "benchmark" && (
@@ -507,6 +514,26 @@ export default function Page() {
             setBenchmark((b) => ({
               ...b,
               roveBoard: fn(b.roveBoard ?? { slots: DEFAULT_SLOTS, properties: [] }),
+            }))
+          }
+          opexPct={opexPct}
+          globalReward={rewardPct}
+          onDeleteProperty={(uid) => deletedUidsRef.current.push(uid)}
+        />
+      )}
+
+      {view === "earn" && (
+        <Benchmark
+          roveMode
+          earnMode
+          cityTabs
+          title="Earn & Redeem"
+          subtitle="Star properties. TBO cost vs MMT sell gives the markup; the band table decides what we keep, and what is left after GST and the gateway is the return we can show the guest."
+          benchmark={benchmark.earnBoard ?? { slots: DEFAULT_SLOTS, properties: [] }}
+          setBenchmark={(fn) =>
+            setBenchmark((b) => ({
+              ...b,
+              earnBoard: fn(b.earnBoard ?? { slots: DEFAULT_SLOTS, properties: [] }),
             }))
           }
           opexPct={opexPct}

@@ -10,10 +10,24 @@ export type Board = any;
 
 export const propsOf = (b: Board): Prop[] => (Array.isArray(b?.properties) ? b.properties : []);
 
-/** Total property count across both boards — the number we refuse to let collapse. */
+/**
+ * Nested boards stored inside the same jsonb document as the main board.
+ *
+ * ADDING A BOARD? Put its key here and nowhere else. Every board in this list
+ * is merged property-by-property and counted by the destructive-write guard.
+ * A board that is NOT in this list gets replaced wholesale by whatever the
+ * client sent — which, for a delta save, means losing every property the
+ * editing tab did not happen to touch. That is precisely how the board was
+ * wiped on 2026-09-09.
+ */
+export const SUB_BOARDS = ["roveBoard", "earnBoard"] as const;
+
+/** Total property count across every board — the number we refuse to let collapse. */
 export function countProps(bm: Board): number {
   if (!bm) return 0;
-  return propsOf(bm).length + propsOf(bm.roveBoard).length;
+  let n = propsOf(bm).length;
+  for (const key of SUB_BOARDS) n += propsOf(bm?.[key]).length;
+  return n;
 }
 
 /**
@@ -96,7 +110,12 @@ export function decideWrite(
   let merged = incoming;
   if (incoming && dbBenchmark) {
     merged = mergeBoard(dbBenchmark, incoming, deletedUids);
-    merged.roveBoard = mergeBoard(dbBenchmark.roveBoard, incoming.roveBoard, deletedUids);
+    // Every nested board is merged the same way as the main one. Driven off
+    // SUB_BOARDS so a new board can never be forgotten here.
+    for (const key of SUB_BOARDS) {
+      const sub = mergeBoard(dbBenchmark[key], incoming[key], deletedUids);
+      if (sub) merged[key] = sub;
+    }
   }
 
   // 2. After merging, the result may only shrink by the number of properties

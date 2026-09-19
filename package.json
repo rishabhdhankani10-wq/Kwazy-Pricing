@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:merge": "node --experimental-strip-types --no-warnings app/api/session/merge.test.mjs"
+    "test:merge": "node --experimental-strip-types --no-warnings app/api/session/merge.test.mjs",
+    "test:earn": "node --experimental-strip-types --no-warnings app/earn.test.mjs",
+    "test": "npm run test:merge && npm run test:earn"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",

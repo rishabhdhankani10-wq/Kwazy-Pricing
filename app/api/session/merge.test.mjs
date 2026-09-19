@@ -6,7 +6,7 @@
 // Case 2 is the exact failure that destroyed the board on 2026-09-09.
 
 import assert from "node:assert/strict";
-import { decideWrite, mergeBoard, countProps, wouldDestroy } from "./merge.ts";
+import { decideWrite, mergeBoard, countProps, wouldDestroy, SUB_BOARDS } from "./merge.ts";
 
 let pass = 0;
 const t = (name, fn) => {
@@ -103,6 +103,58 @@ t("9. legacy properties without uids still merge by city+name", () => {
   const m = mergeBoard(legacyDb, incoming, new Set());
   assert.equal(m.properties.length, 1, "must not duplicate a uid-less property");
   assert.equal(m.properties[0].tag, "updated");
+});
+
+// ── Nested boards ───────────────────────────────────────────────────────────
+// Every board in SUB_BOARDS must be merged property-by-property. A board that
+// is only spread through (...inBoard) loses every untouched property.
+
+const board3 = (main, rove, earn) => ({
+  slots: [], properties: main,
+  roveBoard: { slots: [], properties: rove },
+  earnBoard: { slots: [], properties: earn },
+});
+
+const db3 = board3(
+  Array.from({ length: 69 }, (_, i) => prop(`m${i}`)),
+  Array.from({ length: 428 }, (_, i) => prop(`r${i}`)),
+  Array.from({ length: 30 }, (_, i) => prop(`e${i}`))
+);
+
+t("10. countProps includes every board in SUB_BOARDS", () => {
+  assert.deepEqual([...SUB_BOARDS], ["roveBoard", "earnBoard"]);
+  assert.equal(countProps(db3), 527, "69 + 428 + 30");
+});
+
+t("11. editing one earn hotel does not drop the other 526", () => {
+  const delta = board3([], [], [{ ...prop("e3"), name: "edited" }]);
+  const d = decideWrite(db3, false, delta, new Set(), "delta");
+  assert.equal(d.ok, true);
+  assert.equal(d.newCount, 527, "no property may be lost by a delta save");
+  assert.equal(d.merged.earnBoard.properties.find((p) => p.uid === "e3").name, "edited");
+  assert.equal(d.merged.roveBoard.properties.length, 428, "rove board untouched");
+});
+
+t("12. editing a ROVE hotel does not drop the earn board", () => {
+  const delta = board3([], [{ ...prop("r9"), name: "edited" }], []);
+  const d = decideWrite(db3, false, delta, new Set(), "delta");
+  assert.equal(d.merged.earnBoard.properties.length, 30, "earn board survives a rove edit");
+  assert.equal(d.newCount, 527);
+});
+
+t("13. a client that predates the earn board cannot delete it", () => {
+  // An old tab still sends only { properties, roveBoard } with no earnBoard key.
+  const oldClient = { slots: [], properties: [], roveBoard: { slots: [], properties: [] } };
+  const d = decideWrite(db3, false, oldClient, new Set(), "delta");
+  assert.equal(d.ok, true);
+  assert.equal(d.merged.earnBoard.properties.length, 30, "omitted board is KEPT, not wiped");
+  assert.equal(d.newCount, 527);
+});
+
+t("14. deleting an earn hotel is allowed and counted", () => {
+  const d = decideWrite(db3, false, board3([], [], []), new Set(["e0", "e1"]), "delta");
+  assert.equal(d.ok, true);
+  assert.equal(d.newCount, 525);
 });
 
 console.log(`\n${pass} checks passed`);

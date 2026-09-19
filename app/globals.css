@@ -1363,3 +1363,69 @@ html, body {
   font-style: normal; font-size: 8.5px; color: var(--ink-soft);
   text-transform: uppercase; margin-right: 4px;
 }
+
+/* ── Earn & Redeem ───────────────────────────────────────────────────────── */
+:root { --earn: #1f7a5a; --keep: #8a5a1f; }
+
+.bslot-mk.keep  { color: var(--keep); }
+.bslot-mk.earn  { color: var(--earn); font-weight: 600; }
+.bslot-mk.earn.dead { color: var(--line-2); text-decoration: line-through; }
+.bslot-header .keep { color: var(--keep); }
+.bslot-header .earn { color: var(--earn); }
+
+.src-summary.earn-cols .src-row { grid-template-columns: 1.2fr repeat(6, 0.9fr); }
+.src-row .earn { color: var(--earn); font-weight: 600; }
+.src-head .earn { font-weight: 600; }
+
+.src-box-line.earnline em { color: var(--earn); }
+.src-box-line.earnline strong { color: var(--earn); }
+
+.earn-config {
+  background: var(--white);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.earn-rates { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.earn-basis {
+  border: 1px solid var(--line-2);
+  background: var(--paper);
+  border-radius: 3px;
+  font-family: 'Inter', sans-serif;
+  font-size: 12px;
+  padding: 2px 4px;
+  color: var(--ink);
+}
+.earn-bands { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.earn-band-grid {
+  display: grid;
+  grid-template-columns: auto auto auto auto;
+  gap: 4px 12px;
+  align-items: center;
+}
+.ebh {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-soft); font-weight: 700;
+}
+.ebc { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.ebc.dim { color: var(--ink-soft); }
+.ebx {
+  border: none; background: transparent; color: var(--line-2);
+  cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px;
+}
+.ebx:hover { color: var(--oxblood); }
+.ebadd {
+  border: 1px dashed var(--line-2); background: transparent;
+  border-radius: 4px; padding: 3px 10px; font-size: 11.5px;
+  color: var(--ink-soft); cursor: pointer;
+}
+.ebadd:hover { border-color: var(--ink); color: var(--ink); }
+.earn-formula {
+  margin: 0; font-size: 11.5px; color: var(--ink-soft);
+  border-top: 1px dashed var(--line); padding-top: 10px; line-height: 1.6;
+}
+.earn-formula strong { color: var(--earn); }

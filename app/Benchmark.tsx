@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { compute, fmt, pct } from "./engine";
+import { earnFor, DEFAULT_EARN_CONFIG, type EarnConfig, type Band } from "./earn";
 import DateRange from "./DateRange";
 
 // ── Defaults (all user-editable at runtime) ─────────────────────────────────
@@ -64,6 +65,7 @@ export type Board = {
   cityFlags?: Record<string, CityFlags>; // legacy per-city toggles (kept for old saves)
   hideRove?: boolean;               // board-wide: drop the Rove column everywhere
   hideReturn?: boolean;             // board-wide: drop the Return% column everywhere
+  earn?: EarnConfig;                // Earn & Redeem rates (earn board only)
 };
 
 // The retail benchmark every cost source is measured against.
@@ -75,6 +77,7 @@ export const DEFAULT_USD_RATE = "97";
 // blob — so no DB migration is required.
 export type BenchmarkData = Board & {
   roveBoard?: Board;
+  earnBoard?: Board;                // Earn & Redeem: star properties + reward maths
 };
 
 const num = (s: string) => {
@@ -124,6 +127,7 @@ export const seedBenchmark = (): BenchmarkData => ({
   slots: [...DEFAULT_SLOTS],
   properties: CITY_BUCKETS.map((c) => blankProperty(c, DEFAULT_SLOTS)),
   roveBoard: { slots: [...DEFAULT_SLOTS], properties: [], usdRate: DEFAULT_USD_RATE },
+  earnBoard: { slots: [...DEFAULT_SLOTS], properties: [], earn: DEFAULT_EARN_CONFIG },
 });
 
 // Migrate old (BProperty[] with mmt/goibibo/booking, or object w/ global otas)
@@ -185,41 +189,59 @@ export function normalizeBenchmark(raw: unknown): BenchmarkData {
       }),
     } as BProperty;
   });
-  // Normalize the nested Rove board the same way; never drop it on load.
+  // Normalize a nested board the same way; never drop one on load.
+  const normSub = (sb: Partial<Board> | undefined) => {
+    const sSlots = sb?.slots && sb.slots.length ? sb.slots : [...DEFAULT_SLOTS];
+    const sProps = (sb?.properties ?? []).map((p) => {
+      const otas = p.otas?.length ? p.otas : [...DEFAULT_OTAS];
+      return {
+        id: bId++,
+        uid: p.uid ?? newUid(),
+        city: p.city,
+        name: p.name,
+        otas: [...otas],
+        hidden: [...(p.hidden ?? [])],
+        slots: sSlots.map((sd) => {
+          const existing = p.slots?.find((s) => s.slot === sd.key);
+          const base = existing ?? blankSlot(sd.key, otas);
+          const comps: Record<string, string> = {};
+          for (const o of otas) comps[o] = base.comps?.[o] ?? "";
+          return { ...blankSlot(sd.key, otas), ...base, comps };
+        }),
+      } as BProperty;
+    });
+    return { slots: sSlots, properties: sProps };
+  };
+
   const rb = d.roveBoard as Partial<Board> | undefined;
-  const rSlots = rb?.slots && rb.slots.length ? rb.slots : [...DEFAULT_SLOTS];
-  const rProps = (rb?.properties ?? []).map((p) => {
-    const otas = p.otas?.length ? p.otas : [...DEFAULT_OTAS];
-    return {
-      id: bId++,
-      uid: p.uid ?? newUid(),
-      city: p.city,
-      name: p.name,
-      otas: [...otas],
-      hidden: [...(p.hidden ?? [])],
-      slots: rSlots.map((sd) => {
-        const existing = p.slots?.find((s) => s.slot === sd.key);
-        const base = existing ?? blankSlot(sd.key, otas);
-        const comps: Record<string, string> = {};
-        for (const o of otas) comps[o] = base.comps?.[o] ?? "";
-        return { ...blankSlot(sd.key, otas), ...base, comps };
-      }),
-    } as BProperty;
-  });
+  const rove = normSub(rb);
+  const eb = d.earnBoard as Partial<Board> | undefined;
+  const earnB = normSub(eb);
 
   return {
     slots,
     properties,
     roveBoard: {
-      slots: rSlots,
-      properties: rProps,
+      ...rove,
       usdRate: rb?.usdRate ?? DEFAULT_USD_RATE,
       cityFlags: rb?.cityFlags ?? {},
       hideRove: rb?.hideRove ?? false,
       hideReturn: rb?.hideReturn ?? false,
     },
+    earnBoard: {
+      ...earnB,
+      // Merge stored rates over the defaults so a board saved before a new
+      // knob existed still gets a sane value for it.
+      earn: { ...DEFAULT_EARN_CONFIG, ...(eb?.earn ?? {}) },
+    },
   };
 }
+
+type PropStat = {
+  mk: number | null; mg: number | null;
+  mkAvg: number | null; mgAvg: number | null;
+  er: number | null; erAvg: number | null;   // earn % (earn board only)
+};
 
 const median = (xs: number[]): number | null => {
   if (xs.length === 0) return null;
@@ -311,6 +333,14 @@ export function sourceVsBenchmark(
   return { markup: spread / cost, margin: spread / sell };
 }
 
+// Earn & Redeem for one slot against one cost source, per night.
+export function earnVsBenchmark(slot: BSlot, costRaw: string, cfg: EarnConfig) {
+  const n = slotNights(slot.checkIn, slot.checkOut);
+  const cost = num(costRaw) / n;
+  const sell = num(slot.comps[BENCHMARK_OTA] ?? "") / n;
+  return earnFor(cost, sell, cfg);
+}
+
 // Cost sources for a property, in display order: TBO first, then any OTA the
 // user added, with the benchmark (MMT) excluded — it's the sell price, not a cost.
 export const costSources = (p: BProperty) =>
@@ -318,14 +348,16 @@ export const costSources = (p: BProperty) =>
 
 // Rove layout: slot | dates | TBO | [sources] | MMT | [Rove$] | [Return%]
 //              then 2 result columns (markup + agent) for TBO and each source.
-const roveCols = (nSrc: number, showRove: boolean, showRet: boolean) => {
+const roveCols = (nSrc: number, showRove: boolean, showRet: boolean, earn = false) => {
   const cols = ["1.25fr", "1.2fr", "0.85fr", ...Array(nSrc).fill("0.85fr"), "0.85fr"];
   if (showRove) cols.push("0.85fr");
   if (showRet) cols.push("0.7fr");
-  return [...cols, ...Array((nSrc + 1) * 2).fill("0.8fr")].join(" ");
+  const groups = earn ? 4 : 2;   // mk, margin [, keep, earn]
+  return [...cols, ...Array((nSrc + 1) * groups).fill("0.8fr")].join(" ");
 };
-const roveMinW = (nSrc: number, showRove: boolean, showRet: boolean) =>
-  430 + (nSrc + 1) * 95 + (showRove ? 95 : 0) + (showRet ? 75 : 0) + (nSrc + 1) * 2 * 86;
+const roveMinW = (nSrc: number, showRove: boolean, showRet: boolean, earn = false) =>
+  430 + (nSrc + 1) * 95 + (showRove ? 95 : 0) + (showRet ? 75 : 0) +
+  (nSrc + 1) * (earn ? 4 : 2) * 86;
 
 const gridCols = (n: number) =>
   `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
@@ -338,6 +370,7 @@ export default function Benchmark({
   opexPct,
   globalReward,
   roveMode = false,
+  earnMode = false,
   title = "Rate Benchmark",
   subtitle = "Same properties, sampled across a lead-time × season grid. Median markup you can add per property, averaged across cities.",
   onDeleteProperty,
@@ -348,6 +381,7 @@ export default function Benchmark({
   opexPct: number;
   globalReward: number;
   roveMode?: boolean;
+  earnMode?: boolean;
   title?: string;
   subtitle?: string;
   onDeleteProperty?: (uid: string) => void;
@@ -355,6 +389,13 @@ export default function Benchmark({
 }) {
   const { slots, properties } = benchmark;
   const usdRateNum = num(benchmark.usdRate ?? DEFAULT_USD_RATE) || Number(DEFAULT_USD_RATE);
+  // Memoised so it doesn't retrigger the stats useMemo on every render.
+  const earnCfg: EarnConfig = useMemo(
+    () => ({ ...DEFAULT_EARN_CONFIG, ...(benchmark.earn ?? {}) }),
+    [benchmark.earn]
+  );
+  const setEarn = (patch: Partial<EarnConfig>) =>
+    setBenchmark((b) => ({ ...b, earn: { ...DEFAULT_EARN_CONFIG, ...(b.earn ?? {}), ...patch } }));
   const [newCity, setNewCity] = useState("");
   const [newSlot, setNewSlot] = useState("");
   const [activeCity, setActiveCity] = useState<string>("__all__");
@@ -642,21 +683,23 @@ export default function Benchmark({
     // Scope: the selected city tab, or every city when "All" is chosen.
     const scoped = activeCity === "__all__" ? properties : properties.filter((p) => p.city === activeCity);
     const sourceNames = ["TBO", ...[...new Set(scoped.flatMap((p) => costSources(p)))]];
-    const bucket: Record<string, { mk: number[]; mg: number[] }> = {};
-    for (const s of sourceNames) bucket[s] = { mk: [], mg: [] };
+    const bucket: Record<string, { mk: number[]; mg: number[]; er: number[] }> = {};
+    for (const s of sourceNames) bucket[s] = { mk: [], mg: [], er: [] };
 
     // Per-property medians for every source (also used by the property header).
-    const perProp = new Map<number, Record<string, { mk: number | null; mg: number | null; mkAvg: number | null; mgAvg: number | null }>>();
+    const perProp = new Map<number, Record<string, PropStat>>();
     // "Best of each": per PROPERTY pick its strongest source, then aggregate
     // those winners across the city — not row-by-row.
     const bestMk: number[] = [];
     const bestMg: number[] = [];
+    const bestEr: number[] = [];
 
     for (const p of scoped) {
       const srcs = ["TBO", ...costSources(p)];
       const localMk: Record<string, number[]> = {};
       const localMg: Record<string, number[]> = {};
-      for (const sName of srcs) { localMk[sName] = []; localMg[sName] = []; }
+      const localEr: Record<string, number[]> = {};
+      for (const sName of srcs) { localMk[sName] = []; localMg[sName] = []; localEr[sName] = []; }
       for (const slot of p.slots) {
         for (const sName of srcs) {
           const raw = sName === "TBO" ? slot.tbo : (slot.comps[sName] ?? "");
@@ -664,28 +707,43 @@ export default function Benchmark({
           if (!r) continue;
           localMk[sName].push(r.markup);
           localMg[sName].push(r.margin);
+          if (earnMode) {
+            const e = earnVsBenchmark(slot, raw, earnCfg);
+            if (e) localEr[sName].push(e.earnPct);
+          }
         }
       }
-      const rec: Record<string, { mk: number | null; mg: number | null; mkAvg: number | null; mgAvg: number | null }> = {};
-      let winMk: number | null = null, winMg: number | null = null;
+      const rec: Record<string, PropStat> = {};
+      let winMk: number | null = null, winMg: number | null = null, winEr: number | null = null;
       for (const sName of srcs) {
         const m = median(localMk[sName]);
         const g = median(localMg[sName]);
-        rec[sName] = { mk: m, mg: g, mkAvg: mean(localMk[sName]), mgAvg: mean(localMg[sName]) };
+        const er = median(localEr[sName]);
+        rec[sName] = {
+          mk: m, mg: g,
+          mkAvg: mean(localMk[sName]), mgAvg: mean(localMg[sName]),
+          er, erAvg: mean(localEr[sName]),
+        };
         // Every row in the summary aggregates PER PROPERTY (each hotel counted
         // once), so the source rows and "Best of each" are directly comparable.
         if (m != null) {
-          bucket[sName] ??= { mk: [], mg: [] };
+          bucket[sName] ??= { mk: [], mg: [], er: [] };
           bucket[sName].mk.push(m);
           if (g != null) bucket[sName].mg.push(g);
+          if (er != null) bucket[sName].er.push(er);
         }
-        if (m != null && (winMk === null || m > winMk)) { winMk = m; winMg = g; }
+        if (m != null && (winMk === null || m > winMk)) { winMk = m; winMg = g; winEr = er; }
       }
       perProp.set(p.id, rec);
-      if (winMk !== null) { bestMk.push(winMk); if (winMg != null) bestMg.push(winMg); }
+      if (winMk !== null) {
+        bestMk.push(winMk);
+        if (winMg != null) bestMg.push(winMg);
+        if (winEr != null) bestEr.push(winEr);
+      }
     }
-    return { sourceNames, bucket, bestMk, bestMg, perProp, scope: activeCity };
-  }, [roveMode, properties, activeCity]);
+    return { sourceNames, bucket, bestMk, bestMg, bestEr, perProp, scope: activeCity };
+    // earnCfg is derived from `benchmark`, which `properties` already tracks.
+  }, [roveMode, earnMode, properties, activeCity, earnCfg]);
 
   return (
     <div className="bench">
@@ -695,13 +753,15 @@ export default function Benchmark({
           <p className="bench-sub">{subtitle}</p>
         </div>
         {roveMode && roveStats ? (
-          <div className="src-summary">
+          <div className={"src-summary" + (earnMode ? " earn-cols" : "")}>
             <div className="src-row src-head">
               <span>{activeCity === "__all__" ? "All cities" : activeCity} · source → {BENCHMARK_OTA}<br /><em className="src-scope">per property</em></span>
               <span>Markup med</span>
               <span>Markup avg</span>
               <span>Margin med</span>
               <span>Margin avg</span>
+              {earnMode && <span className="earn">EARN med</span>}
+              {earnMode && <span className="earn">EARN avg</span>}
             </div>
             {roveStats.sourceNames.map((s) => {
               const b = roveStats.bucket[s] ?? { mk: [], mg: [] };
@@ -712,6 +772,8 @@ export default function Benchmark({
                   <span>{mean(b.mk) != null ? pct(mean(b.mk)!) : "—"}</span>
                   <span className="agent">{median(b.mg) != null ? pct(median(b.mg)!) : "—"}</span>
                   <span className="agent">{mean(b.mg) != null ? pct(mean(b.mg)!) : "—"}</span>
+                  {earnMode && <span className="earn">{median(b.er) != null ? pct(median(b.er)!) : "—"}</span>}
+                  {earnMode && <span className="earn">{mean(b.er) != null ? pct(mean(b.er)!) : "—"}</span>}
                 </div>
               );
             })}
@@ -721,6 +783,8 @@ export default function Benchmark({
               <span>{mean(roveStats.bestMk) != null ? pct(mean(roveStats.bestMk)!) : "—"}</span>
               <span className="agent">{median(roveStats.bestMg) != null ? pct(median(roveStats.bestMg)!) : "—"}</span>
               <span className="agent">{mean(roveStats.bestMg) != null ? pct(mean(roveStats.bestMg)!) : "—"}</span>
+              {earnMode && <span className="earn">{median(roveStats.bestEr) != null ? pct(median(roveStats.bestEr)!) : "—"}</span>}
+              {earnMode && <span className="earn">{mean(roveStats.bestEr) != null ? pct(mean(roveStats.bestEr)!) : "—"}</span>}
             </div>
           </div>
         ) : (
@@ -740,7 +804,11 @@ export default function Benchmark({
         )}
       </div>
 
-      {roveMode && (
+      {earnMode && (
+        <EarnControls cfg={earnCfg} onChange={setEarn} />
+      )}
+
+      {roveMode && !earnMode && (
         <div className="bench-config">
           <span className="bcfg-label">USD → INR</span>
           <span className="bcfg-chip">
@@ -768,6 +836,7 @@ export default function Benchmark({
           onAdd={addOtaAll}
           onToggle={toggleOtaAll}
           onFlag={toggleBoardFlag}
+          showColumnFlags={!earnMode}
         />
       )}
 
@@ -869,10 +938,11 @@ export default function Benchmark({
           {propsByCity(city).map((p) => {
             const vis = visibleOtas(p);
             const src = costSources(p);                       // TripJack, etc. (not MMT)
-            const showRove = roveMode && !benchmark.hideRove;
-            const showRet = roveMode && !benchmark.hideReturn;
-            const cols = roveMode ? roveCols(src.length, showRove, showRet) : gridCols(vis.length);
-            const minW = roveMode ? roveMinW(src.length, showRove, showRet) : gridMinW(vis.length);
+            // The Rove $ / Return% columns are meaningless on the earn board.
+            const showRove = roveMode && !earnMode && !benchmark.hideRove;
+            const showRet = roveMode && !earnMode && !benchmark.hideReturn;
+            const cols = roveMode ? roveCols(src.length, showRove, showRet, earnMode) : gridCols(vis.length);
+            const minW = roveMode ? roveMinW(src.length, showRove, showRet, earnMode) : gridMinW(vis.length);
             return (
               <div className="bprop" key={p.id}>
                 <div className="bprop-head">
@@ -907,6 +977,15 @@ export default function Benchmark({
                               <strong>{v?.mgAvg != null ? pct(v.mgAvg) : "—"}</strong>
                               <i>avg</i>
                             </span>
+                            {earnMode && (
+                              <span className="src-box-line earnline">
+                                <em>EARN</em>
+                                <strong>{v?.er != null ? pct(v.er) : "—"}</strong>
+                                <i>med</i>
+                                <strong>{v?.erAvg != null ? pct(v.erAvg) : "—"}</strong>
+                                <i>avg</i>
+                              </span>
+                            )}
                           </span>
                         );
                       })}
@@ -961,6 +1040,14 @@ export default function Benchmark({
                         {["TBO", ...src].map((o) => (
                           <span key={"mg" + o} className="agent">{o}→{BENCHMARK_OTA}<br />margin</span>
                         ))}
+                        {earnMode &&
+                          ["TBO", ...src].map((o) => (
+                            <span key={"kp" + o} className="keep">{o}<br />we keep</span>
+                          ))}
+                        {earnMode &&
+                          ["TBO", ...src].map((o) => (
+                            <span key={"er" + o} className="earn">{o}<br />EARN</span>
+                          ))}
                       </>
                     ) : (
                       vis.map((o) => <span key={o}>{o}</span>)
@@ -1035,6 +1122,32 @@ export default function Benchmark({
                                 </span>
                               );
                             })}
+                            {earnMode &&
+                              ["TBO", ...src].map((o) => {
+                                const e = earnVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), earnCfg);
+                                return (
+                                  <span key={"kp" + o} className="bslot-mk keep">
+                                    {e ? (e.band ? pct(e.keepRate) : "—") : "—"}
+                                  </span>
+                                );
+                              })}
+                            {earnMode &&
+                              ["TBO", ...src].map((o) => {
+                                const e = earnVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), earnCfg);
+                                const tip = e
+                                  ? `spread ${fmt(e.spread)}  −  keep ${fmt(e.keep)}  −  GST ${fmt(e.gst)}  −  gateway ${fmt(e.pg)}  =  ${fmt(e.reward)} to the guest` +
+                                    (e.viable ? "" : `  (short by ${fmt(e.shortfall)} — costs exceed the spread)`)
+                                  : "";
+                                return (
+                                  <span
+                                    key={"er" + o}
+                                    className={"bslot-mk earn" + (e && !e.viable ? " dead" : "")}
+                                    title={tip}
+                                  >
+                                    {e ? pct(e.earnPct) : "—"}
+                                  </span>
+                                );
+                              })}
                           </>
                         ) : (
                           <>
@@ -1088,6 +1201,88 @@ export default function Benchmark({
 
 // City-wide master: add/hide OTAs across every property in the city, and drop
 // the Rove / Return% columns for the whole city at once.
+/**
+ * Editable Earn & Redeem rates. Every number the maths depends on lives here,
+ * so nothing is hard-coded in a formula you can't see.
+ */
+function EarnControls({ cfg, onChange }: { cfg: EarnConfig; onChange: (p: Partial<EarnConfig>) => void }) {
+  const asPct = (f: number) => String(+(f * 100).toFixed(2));
+  const toFrac = (v: string) => {
+    const n = parseFloat(v.replace(/[^0-9.]/g, ""));
+    return isNaN(n) ? 0 : n / 100;
+  };
+  const setBand = (i: number, patch: Partial<Band>) =>
+    onChange({ bands: cfg.bands.map((b, j) => (j === i ? { ...b, ...patch } : b)) });
+  const addBand = () =>
+    onChange({ bands: [...cfg.bands, { from: 0.3, keep: 0.06 }].sort((a, b) => a.from - b.from) });
+  const removeBand = (i: number) =>
+    onChange({ bands: cfg.bands.filter((_, j) => j !== i) });
+
+  const sorted = [...cfg.bands].sort((a, b) => a.from - b.from);
+
+  return (
+    <div className="earn-config">
+      <div className="earn-rates">
+        <span className="bcfg-label">Costs</span>
+        <span className="bcfg-chip">
+          Payment gateway&nbsp;
+          <input className="usd-rate" inputMode="decimal" value={asPct(cfg.pgPct)}
+            onChange={(e) => onChange({ pgPct: toFrac(e.target.value) })} />
+          &nbsp;% of sell
+        </span>
+        <span className="bcfg-chip">
+          GST&nbsp;
+          <input className="usd-rate" inputMode="decimal" value={asPct(cfg.gstPct)}
+            onChange={(e) => onChange({ gstPct: toFrac(e.target.value) })} />
+          &nbsp;% of&nbsp;
+          <select className="earn-basis" value={cfg.gstBasis}
+            onChange={(e) => onChange({ gstBasis: e.target.value as EarnConfig["gstBasis"] })}>
+            <option value="markup">the markup</option>
+            <option value="keep">what we keep</option>
+          </select>
+        </span>
+      </div>
+
+      <div className="earn-bands">
+        <span className="bcfg-label">Our keep, by markup band</span>
+        <div className="earn-band-grid">
+          <span className="ebh">Markup from</span>
+          <span className="ebh">up to</span>
+          <span className="ebh">we keep (% of sell)</span>
+          <span />
+          {sorted.map((b, i) => {
+            const next = sorted[i + 1];
+            const idx = cfg.bands.indexOf(b);
+            return (
+              <Fragment key={i}>
+                <span className="ebc">
+                  <input className="usd-rate" inputMode="decimal" value={asPct(b.from)}
+                    onChange={(e) => setBand(idx, { from: toFrac(e.target.value) })} />%
+                </span>
+                <span className="ebc dim">{next ? asPct(next.from) + "%" : "and above"}</span>
+                <span className="ebc">
+                  <input className="usd-rate" inputMode="decimal" value={asPct(b.keep)}
+                    onChange={(e) => setBand(idx, { keep: toFrac(e.target.value) })} />%
+                </span>
+                <button className="ebx" onClick={() => removeBand(idx)} title="Remove band">×</button>
+              </Fragment>
+            );
+          })}
+        </div>
+        <button className="ebadd" onClick={addBand}>+ band</button>
+      </div>
+
+      <p className="earn-formula">
+        spread = MMT − cost &nbsp;·&nbsp; markup = spread ÷ cost &nbsp;·&nbsp;
+        we keep = band % × MMT &nbsp;·&nbsp;
+        GST = {asPct(cfg.gstPct)}% × {cfg.gstBasis === "keep" ? "our keep" : "the markup"} &nbsp;·&nbsp;
+        gateway = {asPct(cfg.pgPct)}% × MMT &nbsp;·&nbsp;
+        <strong>EARN = (spread − keep − GST − gateway) ÷ MMT</strong>
+      </p>
+    </div>
+  );
+}
+
 function CityMaster({
   city, otas, hiddenEverywhere, onAdd, onToggle,
 }: {
@@ -1127,7 +1322,7 @@ function CityMaster({
 
 // Board-wide master: applies to EVERY city and every property at once.
 function BoardMaster({
-  otas, hiddenEverywhere, hideRove, hideReturn, onAdd, onToggle, onFlag,
+  otas, hiddenEverywhere, hideRove, hideReturn, onAdd, onToggle, onFlag, showColumnFlags = true,
 }: {
   otas: string[];
   hiddenEverywhere: (o: string) => boolean;
@@ -1136,6 +1331,7 @@ function BoardMaster({
   onAdd: (n: string) => void;
   onToggle: (n: string) => void;
   onFlag: (k: "hideRove" | "hideReturn") => void;
+  showColumnFlags?: boolean;
 }) {
   const [val, setVal] = useState("");
   const add = () => { onAdd(val); setVal(""); };
@@ -1161,13 +1357,18 @@ function BoardMaster({
         onKeyDown={(e) => e.key === "Enter" && add()}
       />
       <button className="bcfg-add" onClick={add}>+ OTA</button>
-      <span className="master-sep" />
-      <button className={"master-toggle" + (hideRove ? " off" : "")} onClick={() => onFlag("hideRove")}>
-        {hideRove ? "+ Rove" : "− Rove"}
-      </button>
-      <button className={"master-toggle" + (hideReturn ? " off" : "")} onClick={() => onFlag("hideReturn")}>
-        {hideReturn ? "+ Return%" : "− Return%"}
-      </button>
+      {/* The Rove $ / Return% columns don't exist on the earn board. */}
+      {showColumnFlags && <span className="master-sep" />}
+      {showColumnFlags && (
+        <button className={"master-toggle" + (hideRove ? " off" : "")} onClick={() => onFlag("hideRove")}>
+          {hideRove ? "+ Rove" : "− Rove"}
+        </button>
+      )}
+      {showColumnFlags && (
+        <button className={"master-toggle" + (hideReturn ? " off" : "")} onClick={() => onFlag("hideReturn")}>
+          {hideReturn ? "+ Return%" : "− Return%"}
+        </button>
+      )}
     </div>
   );
 }

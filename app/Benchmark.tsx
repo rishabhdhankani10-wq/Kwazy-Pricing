@@ -2,7 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { compute, fmt, pct } from "./engine";
-import { earnFor, DEFAULT_EARN_CONFIG, type EarnConfig, type Band } from "./earn";
+import { earnFor, redeemFor, DEFAULT_EARN_CONFIG, type EarnConfig, type Band } from "./earn";
 import DateRange from "./DateRange";
 
 // ── Defaults (all user-editable at runtime) ─────────────────────────────────
@@ -241,6 +241,7 @@ type PropStat = {
   mk: number | null; mg: number | null;
   mkAvg: number | null; mgAvg: number | null;
   er: number | null; erAvg: number | null;   // earn % (earn board only)
+  rd: number | null; rdAvg: number | null;   // ₹ per point on redemption
 };
 
 const median = (xs: number[]): number | null => {
@@ -341,6 +342,14 @@ export function earnVsBenchmark(slot: BSlot, costRaw: string, cfg: EarnConfig) {
   return earnFor(cost, sell, cfg);
 }
 
+// Value per point if the guest redeems against this slot, per night.
+export function redeemVsBenchmark(slot: BSlot, costRaw: string, cfg: EarnConfig) {
+  const n = slotNights(slot.checkIn, slot.checkOut);
+  const cost = num(costRaw) / n;
+  const sell = num(slot.comps[BENCHMARK_OTA] ?? "") / n;
+  return redeemFor(cost, sell, cfg);
+}
+
 // Cost sources for a property, in display order: TBO first, then any OTA the
 // user added, with the benchmark (MMT) excluded — it's the sell price, not a cost.
 export const costSources = (p: BProperty) =>
@@ -352,12 +361,12 @@ const roveCols = (nSrc: number, showRove: boolean, showRet: boolean, earn = fals
   const cols = ["1.25fr", "1.2fr", "0.85fr", ...Array(nSrc).fill("0.85fr"), "0.85fr"];
   if (showRove) cols.push("0.85fr");
   if (showRet) cols.push("0.7fr");
-  const groups = earn ? 4 : 2;   // mk, margin [, keep, earn]
+  const groups = earn ? 5 : 2;   // mk, margin [, keep, earn, redeem]
   return [...cols, ...Array((nSrc + 1) * groups).fill("0.8fr")].join(" ");
 };
 const roveMinW = (nSrc: number, showRove: boolean, showRet: boolean, earn = false) =>
   430 + (nSrc + 1) * 95 + (showRove ? 95 : 0) + (showRet ? 75 : 0) +
-  (nSrc + 1) * (earn ? 4 : 2) * 86;
+  (nSrc + 1) * (earn ? 5 : 2) * 86;
 
 const gridCols = (n: number) =>
   `1.4fr 1.35fr 0.9fr ${Array(n).fill("0.9fr").join(" ")} 0.7fr 0.8fr 0.75fr 0.75fr`;
@@ -683,8 +692,8 @@ export default function Benchmark({
     // Scope: the selected city tab, or every city when "All" is chosen.
     const scoped = activeCity === "__all__" ? properties : properties.filter((p) => p.city === activeCity);
     const sourceNames = ["TBO", ...[...new Set(scoped.flatMap((p) => costSources(p)))]];
-    const bucket: Record<string, { mk: number[]; mg: number[]; er: number[] }> = {};
-    for (const s of sourceNames) bucket[s] = { mk: [], mg: [], er: [] };
+    const bucket: Record<string, { mk: number[]; mg: number[]; er: number[]; rd: number[] }> = {};
+    for (const s of sourceNames) bucket[s] = { mk: [], mg: [], er: [], rd: [] };
 
     // Per-property medians for every source (also used by the property header).
     const perProp = new Map<number, Record<string, PropStat>>();
@@ -693,13 +702,15 @@ export default function Benchmark({
     const bestMk: number[] = [];
     const bestMg: number[] = [];
     const bestEr: number[] = [];
+    const bestRd: number[] = [];
 
     for (const p of scoped) {
       const srcs = ["TBO", ...costSources(p)];
       const localMk: Record<string, number[]> = {};
       const localMg: Record<string, number[]> = {};
       const localEr: Record<string, number[]> = {};
-      for (const sName of srcs) { localMk[sName] = []; localMg[sName] = []; localEr[sName] = []; }
+      const localRd: Record<string, number[]> = {};
+      for (const sName of srcs) { localMk[sName] = []; localMg[sName] = []; localEr[sName] = []; localRd[sName] = []; }
       for (const slot of p.slots) {
         for (const sName of srcs) {
           const raw = sName === "TBO" ? slot.tbo : (slot.comps[sName] ?? "");
@@ -710,38 +721,45 @@ export default function Benchmark({
           if (earnMode) {
             const e = earnVsBenchmark(slot, raw, earnCfg);
             if (e) localEr[sName].push(e.earnPct);
+            const d = redeemVsBenchmark(slot, raw, earnCfg);
+            if (d) localRd[sName].push(d.valuePerPoint);
           }
         }
       }
       const rec: Record<string, PropStat> = {};
-      let winMk: number | null = null, winMg: number | null = null, winEr: number | null = null;
+      let winMk: number | null = null, winMg: number | null = null;
+      let winEr: number | null = null, winRd: number | null = null;
       for (const sName of srcs) {
         const m = median(localMk[sName]);
         const g = median(localMg[sName]);
         const er = median(localEr[sName]);
+        const rd = median(localRd[sName]);
         rec[sName] = {
           mk: m, mg: g,
           mkAvg: mean(localMk[sName]), mgAvg: mean(localMg[sName]),
           er, erAvg: mean(localEr[sName]),
+          rd, rdAvg: mean(localRd[sName]),
         };
         // Every row in the summary aggregates PER PROPERTY (each hotel counted
         // once), so the source rows and "Best of each" are directly comparable.
         if (m != null) {
-          bucket[sName] ??= { mk: [], mg: [], er: [] };
+          bucket[sName] ??= { mk: [], mg: [], er: [], rd: [] };
           bucket[sName].mk.push(m);
           if (g != null) bucket[sName].mg.push(g);
           if (er != null) bucket[sName].er.push(er);
+          if (rd != null) bucket[sName].rd.push(rd);
         }
-        if (m != null && (winMk === null || m > winMk)) { winMk = m; winMg = g; winEr = er; }
+        if (m != null && (winMk === null || m > winMk)) { winMk = m; winMg = g; winEr = er; winRd = rd; }
       }
       perProp.set(p.id, rec);
       if (winMk !== null) {
         bestMk.push(winMk);
         if (winMg != null) bestMg.push(winMg);
         if (winEr != null) bestEr.push(winEr);
+        if (winRd != null) bestRd.push(winRd);
       }
     }
-    return { sourceNames, bucket, bestMk, bestMg, bestEr, perProp, scope: activeCity };
+    return { sourceNames, bucket, bestMk, bestMg, bestEr, bestRd, perProp, scope: activeCity };
     // earnCfg is derived from `benchmark`, which `properties` already tracks.
   }, [roveMode, earnMode, properties, activeCity, earnCfg]);
 
@@ -762,6 +780,7 @@ export default function Benchmark({
               <span>Margin avg</span>
               {earnMode && <span className="earn">EARN med</span>}
               {earnMode && <span className="earn">EARN avg</span>}
+              {earnMode && <span className="redeem">₹/pt med</span>}
             </div>
             {roveStats.sourceNames.map((s) => {
               const b = roveStats.bucket[s] ?? { mk: [], mg: [] };
@@ -774,6 +793,7 @@ export default function Benchmark({
                   <span className="agent">{mean(b.mg) != null ? pct(mean(b.mg)!) : "—"}</span>
                   {earnMode && <span className="earn">{median(b.er) != null ? pct(median(b.er)!) : "—"}</span>}
                   {earnMode && <span className="earn">{mean(b.er) != null ? pct(mean(b.er)!) : "—"}</span>}
+                  {earnMode && <span className="redeem">{median(b.rd) != null ? "\u20B9" + median(b.rd)!.toFixed(3) : "—"}</span>}
                 </div>
               );
             })}
@@ -785,6 +805,7 @@ export default function Benchmark({
               <span className="agent">{mean(roveStats.bestMg) != null ? pct(mean(roveStats.bestMg)!) : "—"}</span>
               {earnMode && <span className="earn">{median(roveStats.bestEr) != null ? pct(median(roveStats.bestEr)!) : "—"}</span>}
               {earnMode && <span className="earn">{mean(roveStats.bestEr) != null ? pct(mean(roveStats.bestEr)!) : "—"}</span>}
+              {earnMode && <span className="redeem">{median(roveStats.bestRd) != null ? "\u20B9" + median(roveStats.bestRd)!.toFixed(3) : "—"}</span>}
             </div>
           </div>
         ) : (
@@ -978,6 +999,15 @@ export default function Benchmark({
                               <i>avg</i>
                             </span>
                             {earnMode && (
+                              <span className="src-box-line redeemline">
+                                <em>₹/PT</em>
+                                <strong>{v?.rd != null ? "\u20B9" + v.rd.toFixed(3) : "—"}</strong>
+                                <i>med</i>
+                                <strong>{v?.rdAvg != null ? "\u20B9" + v.rdAvg.toFixed(3) : "—"}</strong>
+                                <i>avg</i>
+                              </span>
+                            )}
+                            {earnMode && (
                               <span className="src-box-line earnline">
                                 <em>EARN</em>
                                 <strong>{v?.er != null ? pct(v.er) : "—"}</strong>
@@ -1047,6 +1077,10 @@ export default function Benchmark({
                         {earnMode &&
                           ["TBO", ...src].map((o) => (
                             <span key={"er" + o} className="earn">{o}<br />EARN</span>
+                          ))}
+                        {earnMode &&
+                          ["TBO", ...src].map((o) => (
+                            <span key={"rd" + o} className="redeem">{o}<br />₹/POINT</span>
                           ))}
                       </>
                     ) : (
@@ -1148,6 +1182,25 @@ export default function Benchmark({
                                   </span>
                                 );
                               })}
+                            {earnMode &&
+                              ["TBO", ...src].map((o) => {
+                                const d = redeemVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), earnCfg);
+                                const tip = d
+                                  ? `${Math.round(d.pointsNeeded).toLocaleString("en-IN")} points buys this ${fmt(d.sell)} room ` +
+                                    `(cost ${fmt(d.cost)} + GST ${fmt(d.gst)}${d.keep ? " + keep " + fmt(d.keep) : ""}). ` +
+                                    `Ceiling ₹${d.ceiling.toFixed(3)} = 1 + markup.` +
+                                    (d.atPar ? ` At par — you absorb ${fmt(d.shortfall)}.` : "")
+                                  : "";
+                                return (
+                                  <span
+                                    key={"rd" + o}
+                                    className={"bslot-mk redeem" + (d && d.atPar ? " par" : "")}
+                                    title={tip}
+                                  >
+                                    {d ? "\u20B9" + d.valuePerPoint.toFixed(3) : "—"}
+                                  </span>
+                                );
+                              })}
                           </>
                         ) : (
                           <>
@@ -1243,6 +1296,26 @@ function EarnControls({ cfg, onChange }: { cfg: EarnConfig; onChange: (p: Partia
         </span>
       </div>
 
+      <div className="earn-rates">
+        <span className="bcfg-label">Redemption</span>
+        <span className="bcfg-chip">
+          Gateway&nbsp;
+          <input className="usd-rate" inputMode="decimal" value={asPct(cfg.redeemPgPct)}
+            onChange={(e) => onChange({ redeemPgPct: toFrac(e.target.value) })} />
+          &nbsp;% of sell
+        </span>
+        <label className="earn-check">
+          <input type="checkbox" checked={cfg.redeemGst}
+            onChange={(e) => onChange({ redeemGst: e.target.checked })} />
+          GST still payable
+        </label>
+        <label className="earn-check">
+          <input type="checkbox" checked={cfg.redeemKeep}
+            onChange={(e) => onChange({ redeemKeep: e.target.checked })} />
+          Still take our band keep
+        </label>
+      </div>
+
       <div className="earn-bands">
         <span className="bcfg-label">Our keep, by markup band</span>
         <div className="earn-band-grid">
@@ -1278,6 +1351,10 @@ function EarnControls({ cfg, onChange }: { cfg: EarnConfig; onChange: (p: Partia
         GST = {asPct(cfg.gstPct)}% embedded in {cfg.gstBasis === "keep" ? "our keep" : "the markup"} (÷{(1 + cfg.gstPct).toFixed(2)}) &nbsp;·&nbsp;
         gateway = {asPct(cfg.pgPct)}% × MMT &nbsp;·&nbsp;
         <strong>EARN = (spread − keep − GST − gateway) ÷ MMT</strong>
+        <br />
+        points to redeem = cost + GST{cfg.redeemKeep ? " + keep" : ""}
+        {cfg.redeemPgPct > 0 ? " + gateway" : ""} &nbsp;·&nbsp;
+        <strong className="redeem">₹/POINT = MMT ÷ points</strong>, capped at 1 + markup
       </p>
     </div>
   );

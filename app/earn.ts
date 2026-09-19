@@ -47,6 +47,15 @@ export type EarnConfig = {
   gstPct: number;
   gstBasis: GstBasis;
   bands: Band[];
+
+  // ── Redemption ───────────────────────────────────────────────────────────
+  /** Take the band keep on a redemption too? Default false: the whole spread
+   *  goes to the guest, which is what lifts a point above ₹1. */
+  redeemKeep: boolean;
+  /** Gateway % on a redemption. Default 0 — paying in points means no card. */
+  redeemPgPct: number;
+  /** Is the markup still taxable when the consideration is points? */
+  redeemGst: boolean;
 };
 
 export const DEFAULT_EARN_CONFIG: EarnConfig = {
@@ -54,6 +63,9 @@ export const DEFAULT_EARN_CONFIG: EarnConfig = {
   gstPct: DEFAULT_GST_PCT,
   gstBasis: DEFAULT_GST_BASIS,
   bands: DEFAULT_BANDS,
+  redeemKeep: false,
+  redeemPgPct: 0,
+  redeemGst: true,
 };
 
 /**
@@ -142,3 +154,77 @@ export function earnFor(cost: number, sell: number, cfg: EarnConfig): EarnResult
 }
 
 export const pctStr = (n: number) => (n * 100).toFixed(1) + "%";
+
+
+// ── Redemption ──────────────────────────────────────────────────────────────
+//
+// The guest pays in points. The room still costs you the TBO price, so you must
+// collect enough points to cover that plus anything you cannot avoid paying out.
+// Everything you don't need to hold back makes each point stretch further:
+//
+//   pointsNeeded  = cost + GST [+ keep] [+ gateway]
+//   valuePerPoint = sell / pointsNeeded
+//
+// Note what this means: a point always consumes exactly ₹1 of YOUR outlay, on
+// every property. The uplift the guest sees is value against MMT's retail
+// price, and it costs you nothing extra to hand over — which is why guests
+// redeeming on your fattest inventory does not hurt you.
+//
+// Ceiling: valuePerPoint can never exceed sell/cost = 1 + markup. Past that you
+// are funding the guest's stay.
+//
+// Floor: 1 point is promised to be worth at least ₹1, so the value is floored
+// there and the gap you would absorb is reported as `shortfall`.
+
+export type RedeemResult = {
+  cost: number;
+  sell: number;
+  spread: number;
+  markup: number;
+  gst: number;             // rupees, embedded
+  keep: number;            // rupees retained (0 unless redeemKeep)
+  pg: number;              // rupees (0 unless redeemPgPct set)
+  pointsNeeded: number;    // points the guest spends for this room
+  valuePerPoint: number;   // rupees of room per point, floored at 1.00
+  upliftPct: number;       // valuePerPoint - 1
+  ceiling: number;         // 1 + markup — the most a point could ever be worth
+  atPar: boolean;          // the ₹1 floor bound; you fund the gap
+  shortfall: number;       // rupees absorbed when atPar
+};
+
+export function redeemFor(cost: number, sell: number, cfg: EarnConfig): RedeemResult | null {
+  if (!cost || !sell || cost <= 0 || sell <= 0) return null;
+
+  const spread = sell - cost;
+  const markup = spread / cost;
+
+  const band = bandFor(markup, cfg.bands);
+  const keep = cfg.redeemKeep && band ? band.keep * sell : 0;
+
+  const gstBase = cfg.gstBasis === "keep" ? keep : Math.max(0, spread);
+  const gst = cfg.redeemGst ? gstBase * (cfg.gstPct / (1 + cfg.gstPct)) : 0;
+
+  const pg = cfg.redeemPgPct * sell;
+
+  const needed = cost + gst + keep + pg;
+  const raw = needed > 0 ? sell / needed : 0;
+  const atPar = raw < 1;
+
+  return {
+    cost,
+    sell,
+    spread,
+    markup,
+    gst,
+    keep,
+    pg,
+    pointsNeeded: atPar ? sell : needed,
+    valuePerPoint: atPar ? 1 : raw,
+    upliftPct: (atPar ? 1 : raw) - 1,
+    ceiling: 1 + markup,
+    atPar,
+    shortfall: atPar ? needed - sell : 0,
+  };
+}
+
+export const rupeeStr = (n: number) => "\u20B9" + n.toFixed(3);

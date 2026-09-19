@@ -2,7 +2,7 @@
 // Run: npm run test:earn
 
 import assert from "node:assert/strict";
-import { earnFor, bandFor, DEFAULT_EARN_CONFIG, DEFAULT_BANDS } from "./earn.ts";
+import { earnFor, redeemFor, bandFor, DEFAULT_EARN_CONFIG, DEFAULT_BANDS } from "./earn.ts";
 
 let pass = 0;
 const t = (name, fn) => {
@@ -103,6 +103,78 @@ t("earn % never exceeds the margin — you cannot give away more than the spread
     const r = earnFor(c, s, DEFAULT_EARN_CONFIG);
     assert.ok(r.earnPct <= r.margin + 1e-9, `earn ${r.earnPct} > margin ${r.margin}`);
   }
+});
+
+
+// ── Redemption ──────────────────────────────────────────────────────────────
+// No gateway (paying in points means no card), GST still payable, band keep
+// forgone by default.
+
+t("R1. 12% markup room: ~₹1.10 per point", () => {
+  const cost = 10000 / 1.12;                     // 8,928.57
+  const r = redeemFor(cost, 10000, DEFAULT_EARN_CONFIG);
+  near(r.gst, 163.44, 0.02);                     // 1,071.43 x 0.18/1.18
+  assert.equal(r.keep, 0, "keep forgone by default");
+  assert.equal(r.pg, 0, "no gateway on a points booking");
+  near(r.pointsNeeded, 9092.01, 0.05);
+  near(r.valuePerPoint, 1.0999, 0.001);
+  near(r.ceiling, 1.12, 0.001);
+});
+
+t("R2. value per point rises with markup, and only with markup", () => {
+  const rows = [[0.05, 1.0420], [0.12, 1.0999], [0.15, 1.1243], [0.20, 1.1645], [0.25, 1.2041]];
+  for (const [m, expected] of rows) {
+    const r = redeemFor(10000 / (1 + m), 10000, DEFAULT_EARN_CONFIG);
+    near(r.valuePerPoint, expected, 0.001);
+  }
+});
+
+t("R3. a point can never be worth more than 1 + markup", () => {
+  for (const m of [0.02, 0.05, 0.12, 0.25, 0.5]) {
+    const r = redeemFor(10000 / (1 + m), 10000, DEFAULT_EARN_CONFIG);
+    assert.ok(r.valuePerPoint <= r.ceiling + 1e-9,
+      `value ${r.valuePerPoint} exceeded ceiling ${r.ceiling}`);
+  }
+});
+
+t("R4. the ceiling is only reached when no GST is payable", () => {
+  const m = 0.12;
+  const noTax = redeemFor(10000 / (1 + m), 10000, { ...DEFAULT_EARN_CONFIG, redeemGst: false });
+  near(noTax.valuePerPoint, 1.12, 0.0001);
+  assert.equal(noTax.gst, 0);
+});
+
+t("R5. taking the keep lowers what a point is worth", () => {
+  const cost = 10000 / 1.12;
+  const give = redeemFor(cost, 10000, DEFAULT_EARN_CONFIG);
+  const take = redeemFor(cost, 10000, { ...DEFAULT_EARN_CONFIG, redeemKeep: true });
+  near(take.keep, 200);                          // band 2 = 2% of sell
+  near(take.valuePerPoint, 1.0762, 0.001);
+  assert.ok(take.valuePerPoint < give.valuePerPoint);
+});
+
+t("R6. a point always consumes exactly ₹1 of our own outlay", () => {
+  // This is the property that makes redemption safe against cherry-picking:
+  // whichever hotel the guest picks, our cost per point is 1.00.
+  for (const m of [0.05, 0.12, 0.25]) {
+    const r = redeemFor(10000 / (1 + m), 10000, DEFAULT_EARN_CONFIG);
+    const ourOutlay = r.cost + r.gst + r.keep + r.pg;
+    near(ourOutlay / r.pointsNeeded, 1.0, 1e-9);
+  }
+});
+
+t("R7. below-cost rooms floor at ₹1 and report what we absorb", () => {
+  const r = redeemFor(10500, 10000, DEFAULT_EARN_CONFIG);
+  assert.equal(r.valuePerPoint, 1, "the ₹1 promise holds");
+  assert.equal(r.upliftPct, 0);
+  assert.ok(r.atPar);
+  near(r.shortfall, 500, 0.01);                  // we fund the gap
+  assert.equal(r.pointsNeeded, 10000);
+});
+
+t("R8. missing prices return null", () => {
+  assert.equal(redeemFor(0, 10000, DEFAULT_EARN_CONFIG), null);
+  assert.equal(redeemFor(9000, 0, DEFAULT_EARN_CONFIG), null);
 });
 
 console.log(`\n${pass} checks passed`);

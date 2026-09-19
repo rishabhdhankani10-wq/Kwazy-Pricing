@@ -1429,3 +1429,18 @@ html, body {
   border-top: 1px dashed var(--line); padding-top: 10px; line-height: 1.6;
 }
 .earn-formula strong { color: var(--earn); }
+
+/* Redemption: value per point */
+:root { --redeem: #6b3fa0; }
+.bslot-mk.redeem { color: var(--redeem); font-weight: 600; }
+.bslot-mk.redeem.par { color: var(--ink-soft); font-weight: 500; }
+.bslot-header .redeem { color: var(--redeem); }
+.src-row .redeem, .src-head .redeem { color: var(--redeem); font-weight: 600; }
+.src-summary.earn-cols .src-row { grid-template-columns: 1.2fr repeat(7, 0.9fr); }
+.src-box-line.redeemline em, .src-box-line.redeemline strong { color: var(--redeem); }
+.earn-formula strong.redeem { color: var(--redeem); }
+.earn-check {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--ink); cursor: pointer;
+}
+.earn-check input { accent-color: var(--redeem); }

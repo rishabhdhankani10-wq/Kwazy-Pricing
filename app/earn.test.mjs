@@ -34,10 +34,10 @@ t("worked example: cost 9,000 / sell 10,000 (11.1% markup, band 1)", () => {
   near(r.margin, 0.10);
   assert.equal(r.keepRate, 0.01, "11.1% markup → 1% of sell");
   near(r.keep, 100);
-  near(r.gst, 180);      // 18% of the 1,000 spread
+  near(r.gst, 152.54);   // tax EMBEDDED in the 1,000 spread: 1000 x 0.18/1.18
   near(r.pg, 200);       // 2% of 10,000 sell
-  near(r.reward, 520);   // 1000 − 100 − 180 − 200
-  near(r.earnPct, 0.052);
+  near(r.reward, 547.46);// 1000 − 100 − 152.54 − 200
+  near(r.earnPct, 0.0547);
   assert.equal(r.viable, true);
 });
 
@@ -46,14 +46,15 @@ t("worked example: cost 8,000 / sell 10,000 (25% markup, top band)", () => {
   near(r.markup, 0.25);
   assert.equal(r.keepRate, 0.05, "25% markup → 5% of sell");
   near(r.keep, 500);
-  near(r.gst, 360);      // 18% of 2,000
+  near(r.gst, 305.08);   // 2000 x 0.18/1.18
   near(r.pg, 200);
-  near(r.reward, 940);   // 2000 − 500 − 360 − 200
-  near(r.earnPct, 0.094);
+  near(r.reward, 994.92);// 2000 − 500 − 305.08 − 200
+  near(r.earnPct, 0.0995);
 });
 
 t("a thin-margin room cannot fund its costs and pays no reward", () => {
-  // 2% markup: spread 196 on a 9,996 sell. Keep 100 + GST 35 + PG 200 = 335 > 196.
+  // 2% markup: spread 196 on a 9,996 sell.
+  // Keep ~100 + GST ~30 + gateway ~200 = ~330, well past the 196 available.
   const r = earnFor(9800, 9996, DEFAULT_EARN_CONFIG);
   assert.equal(r.viable, false);
   assert.equal(r.reward, 0, "reward is floored at zero, never negative");
@@ -78,9 +79,18 @@ t("gateway % is honoured and editable", () => {
 t("GST basis can be switched from markup to keep", () => {
   const onMarkup = earnFor(8000, 10000, DEFAULT_EARN_CONFIG);
   const onKeep = earnFor(8000, 10000, { ...DEFAULT_EARN_CONFIG, gstBasis: "keep" });
-  near(onMarkup.gst, 360);          // 18% of 2,000 spread
-  near(onKeep.gst, 90);             // 18% of the 500 we keep
+  near(onMarkup.gst, 305.08);       // embedded in the 2,000 spread
+  near(onKeep.gst, 76.27);          // embedded in the 500 we keep: 500 x 0.18/1.18
   assert.ok(onKeep.reward > onMarkup.reward);
+});
+
+t("GST is embedded, never added on top of the sell price", () => {
+  const r = earnFor(9000, 10000, DEFAULT_EARN_CONFIG);
+  // Everything paid out plus everything retained must equal the sell price.
+  const accounted = r.cost + r.gst + r.keep + r.pg + r.reward;
+  near(accounted, 10000, 0.01);
+  // The base retained on the markup is spread / 1.18.
+  near(r.spread - r.gst, 1000 / 1.18);
 });
 
 t("missing prices return null rather than a fake zero", () => {

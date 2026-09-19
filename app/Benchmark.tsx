@@ -1275,7 +1275,7 @@ function EarnControls({ cfg, onChange }: { cfg: EarnConfig; onChange: (p: Partia
       <p className="earn-formula">
         spread = MMT − cost &nbsp;·&nbsp; markup = spread ÷ cost &nbsp;·&nbsp;
         we keep = band % × MMT &nbsp;·&nbsp;
-        GST = {asPct(cfg.gstPct)}% × {cfg.gstBasis === "keep" ? "our keep" : "the markup"} &nbsp;·&nbsp;
+        GST = {asPct(cfg.gstPct)}% embedded in {cfg.gstBasis === "keep" ? "our keep" : "the markup"} (÷{(1 + cfg.gstPct).toFixed(2)}) &nbsp;·&nbsp;
         gateway = {asPct(cfg.pgPct)}% × MMT &nbsp;·&nbsp;
         <strong>EARN = (spread − keep − GST − gateway) ÷ MMT</strong>
       </p>

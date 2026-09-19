@@ -8,7 +8,7 @@
 //   margin  = spread / sell
 //
 //   keep    = platformMarginRate(markup) x sell     (flat % of sell, by band)
-//   gst     = gstPct x <basis>                      (default 18% of the markup)
+//   gst     = <basis> x gstPct/(1+gstPct)           (the tax EMBEDDED in it)
 //   pg      = pgPct  x sell                         (default 2% of sell)
 //   reward  = spread - keep - gst - pg              <- passed to the user
 //   earnPct = reward / sell                         <- the headline "earn X% back"
@@ -83,7 +83,7 @@ export type EarnResult = {
   band: Band | null;
   keepRate: number;     // fraction of sell we retain
   keep: number;         // rupees
-  gst: number;          // rupees
+  gst: number;          // rupees — the tax embedded in the basis, not added on top
   pg: number;           // rupees
   reward: number;       // rupees passed to the user (never negative)
   earnPct: number;      // reward / sell  <- the headline
@@ -109,8 +109,14 @@ export function earnFor(cost: number, sell: number, cfg: EarnConfig): EarnResult
   // GST is charged on the markup by default (agent model: you are taxed on the
   // value you add, not on the room). Switching the basis to "keep" taxes only
   // the fee you actually retain.
+  //
+  // The sell price is GST-INCLUSIVE: the customer pays MMT's price and nothing
+  // more, so the tax is already sitting inside the spread rather than being
+  // added on top of it. On a 1,000 markup at 18% that is
+  //     1,000 x 0.18/1.18 = 152.54 of tax, leaving 847.46 of base
+  // — NOT 180. Charging 180 would assume you can bill 10,180 for a 10,000 room.
   const gstBase = cfg.gstBasis === "keep" ? keep : spread;
-  const gst = cfg.gstPct * gstBase;
+  const gst = gstBase * (cfg.gstPct / (1 + cfg.gstPct));
 
   const pg = cfg.pgPct * sell;
 

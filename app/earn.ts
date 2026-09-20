@@ -49,8 +49,9 @@ export type EarnConfig = {
   bands: Band[];
 
   // ── Redemption ───────────────────────────────────────────────────────────
-  /** Take the band keep on a redemption too? Default false: the whole spread
-   *  goes to the guest, which is what lifts a point above ₹1. */
+  /** Take the band keep on a redemption too? Default TRUE: a redemption is a
+   *  booking like any other, so the same band applies on both sides. Only the
+   *  REMAINDER of the markup lifts a point above ₹1. */
   redeemKeep: boolean;
   /** Gateway % on a redemption. Default 0 — paying in points means no card. */
   redeemPgPct: number;
@@ -63,7 +64,7 @@ export const DEFAULT_EARN_CONFIG: EarnConfig = {
   gstPct: DEFAULT_GST_PCT,
   gstBasis: DEFAULT_GST_BASIS,
   bands: DEFAULT_BANDS,
-  redeemKeep: false,
+  redeemKeep: true,
   redeemPgPct: 0,
   redeemGst: true,
 };
@@ -77,10 +78,15 @@ export const DEFAULT_EARN_CONFIG: EarnConfig = {
  */
 export function bandFor(rate: number, bands: Band[]): Band | null {
   if (!isFinite(rate) || rate < 0) return null;
+  // Tolerance matters: a room priced at exactly 15% markup computes as
+  // 0.14999999999999997 in binary floating point, which would silently drop it
+  // into the band below and hand it the wrong keep. Treat anything within a
+  // rounding error of a boundary as being ON that boundary.
+  const EPS = 1e-9;
   const sorted = [...bands].sort((a, b) => a.from - b.from);
   let hit: Band | null = null;
   for (const b of sorted) {
-    if (rate >= b.from) hit = b;
+    if (rate >= b.from - EPS) hit = b;
     else break;
   }
   return hit;
@@ -162,7 +168,7 @@ export const pctStr = (n: number) => (n * 100).toFixed(1) + "%";
 // collect enough points to cover that plus anything you cannot avoid paying out.
 // Everything you don't need to hold back makes each point stretch further:
 //
-//   pointsNeeded  = cost + GST [+ keep] [+ gateway]
+//   pointsNeeded  = cost + GST + keep [+ gateway]
 //   valuePerPoint = sell / pointsNeeded
 //
 // Note what this means: a point always consumes exactly ₹1 of YOUR outlay, on

@@ -1187,7 +1187,7 @@ export default function Benchmark({
                                 const d = redeemVsBenchmark(s, o === "TBO" ? s.tbo : (s.comps[o] ?? ""), earnCfg);
                                 const tip = d
                                   ? `${Math.round(d.pointsNeeded).toLocaleString("en-IN")} points buys this ${fmt(d.sell)} room ` +
-                                    `(cost ${fmt(d.cost)} + GST ${fmt(d.gst)}${d.keep ? " + keep " + fmt(d.keep) : ""}). ` +
+                                    `(cost ${fmt(d.cost)} + GST ${fmt(d.gst)}${d.keep ? " + our keep " + fmt(d.keep) : ""}). ` +
                                     `Ceiling ₹${d.ceiling.toFixed(3)} = 1 + markup.` +
                                     (d.atPar ? ` At par — you absorb ${fmt(d.shortfall)}.` : "")
                                   : "";
@@ -1312,7 +1312,7 @@ function EarnControls({ cfg, onChange }: { cfg: EarnConfig; onChange: (p: Partia
         <label className="earn-check">
           <input type="checkbox" checked={cfg.redeemKeep}
             onChange={(e) => onChange({ redeemKeep: e.target.checked })} />
-          Still take our band keep
+          Take our band keep on redemptions too
         </label>
       </div>
 
@@ -1352,7 +1352,7 @@ function EarnControls({ cfg, onChange }: { cfg: EarnConfig; onChange: (p: Partia
         gateway = {asPct(cfg.pgPct)}% × MMT &nbsp;·&nbsp;
         <strong>EARN = (spread − keep − GST − gateway) ÷ MMT</strong>
         <br />
-        points to redeem = cost + GST{cfg.redeemKeep ? " + keep" : ""}
+        points to redeem = cost + GST{cfg.redeemKeep ? " + our keep" : ""}
         {cfg.redeemPgPct > 0 ? " + gateway" : ""} &nbsp;·&nbsp;
         <strong className="redeem">₹/POINT = MMT ÷ points</strong>, capped at 1 + markup
       </p>

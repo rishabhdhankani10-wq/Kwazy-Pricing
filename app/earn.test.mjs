@@ -26,6 +26,12 @@ t("bands match the spec table exactly", () => {
   assert.equal(bandFor(0.25, DEFAULT_BANDS).keep, 0.05);
   assert.equal(bandFor(3.00, DEFAULT_BANDS).keep, 0.05, "no upper bound on the top band");
   assert.equal(bandFor(-0.05, DEFAULT_BANDS), null, "below cost is in no band");
+  // Floating point: 10000/1.15 yields a markup of 0.14999999999999997.
+  // Without a tolerance that room falls into the 12% band and is underpaid.
+  const sell = 10000, cost = sell / 1.15;
+  const m = (sell - cost) / cost;
+  assert.ok(m < 0.15, "the computed markup really is a hair under 0.15");
+  assert.equal(bandFor(m, DEFAULT_BANDS).keep, 0.03, "must still land in the 15% band");
 });
 
 t("worked example: cost 9,000 / sell 10,000 (11.1% markup, band 1)", () => {
@@ -107,22 +113,22 @@ t("earn % never exceeds the margin — you cannot give away more than the spread
 
 
 // ── Redemption ──────────────────────────────────────────────────────────────
-// No gateway (paying in points means no card), GST still payable, band keep
-// forgone by default.
+// No gateway (paying in points means no card), GST still payable, and the band
+// keep IS taken — same 5% of sell as on a cash booking, both sides.
 
-t("R1. 12% markup room: ~₹1.10 per point", () => {
+t("R1. 12% markup room, keep taken: ~₹1.076 per point", () => {
   const cost = 10000 / 1.12;                     // 8,928.57
   const r = redeemFor(cost, 10000, DEFAULT_EARN_CONFIG);
   near(r.gst, 163.44, 0.02);                     // 1,071.43 x 0.18/1.18
-  assert.equal(r.keep, 0, "keep forgone by default");
+  near(r.keep, 200);                             // band 2 = 2% of sell, TAKEN
   assert.equal(r.pg, 0, "no gateway on a points booking");
-  near(r.pointsNeeded, 9092.01, 0.05);
-  near(r.valuePerPoint, 1.0999, 0.001);
+  near(r.pointsNeeded, 9292.01, 0.05);           // cost + GST + keep
+  near(r.valuePerPoint, 1.0762, 0.001);
   near(r.ceiling, 1.12, 0.001);
 });
 
 t("R2. value per point rises with markup, and only with markup", () => {
-  const rows = [[0.05, 1.0420], [0.12, 1.0999], [0.15, 1.1243], [0.20, 1.1645], [0.25, 1.2041]];
+  const rows = [[0.05, 1.0313], [0.12, 1.0762], [0.15, 1.0876], [0.20, 1.1126], [0.25, 1.1357]];
   for (const [m, expected] of rows) {
     const r = redeemFor(10000 / (1 + m), 10000, DEFAULT_EARN_CONFIG);
     near(r.valuePerPoint, expected, 0.001);
@@ -137,19 +143,22 @@ t("R3. a point can never be worth more than 1 + markup", () => {
   }
 });
 
-t("R4. the ceiling is only reached when no GST is payable", () => {
+t("R4. the ceiling needs no GST AND no keep", () => {
   const m = 0.12;
-  const noTax = redeemFor(10000 / (1 + m), 10000, { ...DEFAULT_EARN_CONFIG, redeemGst: false });
-  near(noTax.valuePerPoint, 1.12, 0.0001);
-  assert.equal(noTax.gst, 0);
+  const bare = redeemFor(10000 / (1 + m), 10000,
+    { ...DEFAULT_EARN_CONFIG, redeemGst: false, redeemKeep: false });
+  near(bare.valuePerPoint, 1.12, 0.0001);
+  assert.equal(bare.gst, 0);
+  assert.equal(bare.keep, 0);
 });
 
-t("R5. taking the keep lowers what a point is worth", () => {
+t("R5. forgoing the keep raises what a point is worth", () => {
   const cost = 10000 / 1.12;
-  const give = redeemFor(cost, 10000, DEFAULT_EARN_CONFIG);
-  const take = redeemFor(cost, 10000, { ...DEFAULT_EARN_CONFIG, redeemKeep: true });
-  near(take.keep, 200);                          // band 2 = 2% of sell
+  const take = redeemFor(cost, 10000, DEFAULT_EARN_CONFIG);            // keep ON
+  const give = redeemFor(cost, 10000, { ...DEFAULT_EARN_CONFIG, redeemKeep: false });
+  near(take.keep, 200);
   near(take.valuePerPoint, 1.0762, 0.001);
+  near(give.valuePerPoint, 1.0999, 0.001);
   assert.ok(take.valuePerPoint < give.valuePerPoint);
 });
 
@@ -161,6 +170,17 @@ t("R6. a point always consumes exactly ₹1 of our own outlay", () => {
     const ourOutlay = r.cost + r.gst + r.keep + r.pg;
     near(ourOutlay / r.pointsNeeded, 1.0, 1e-9);
   }
+});
+
+t("R6b. Roseate: the real row, keep taken on both sides", () => {
+  const r = redeemFor(60165 / 3, 114858 / 3, DEFAULT_EARN_CONFIG);
+  near(r.markup, 0.9091, 0.0002);
+  near(r.keep, 0.05 * 114858 / 3, 0.02);         // 1,914.30 /night
+  near(r.gst, 2781, 0.5);
+  near(r.pointsNeeded, 74250.90 / 3, 0.05);      // 24,750.30 /night
+  near(r.valuePerPoint, 1.5469, 0.001);
+  assert.ok(r.valuePerPoint > 1, "still beats the ₹1 promise");
+  assert.ok(r.valuePerPoint < r.ceiling, "still under 1 + markup");
 });
 
 t("R7. below-cost rooms floor at ₹1 and report what we absorb", () => {
